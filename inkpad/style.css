@@ -1,0 +1,454 @@
+/* ---- editor header ------------------------------------------------------ */
+
+.gn-header {
+  background: #37629f;
+  color: white;
+  box-shadow: 0 1px 0 alpha(black, 0.18);
+  min-height: 46px;
+}
+.gn-header button {
+  color: white;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 10px;
+  font-weight: normal;
+  transition: background 160ms ease, color 160ms ease, box-shadow 160ms ease;
+}
+.gn-header button:hover {
+  background: alpha(white, 0.13);
+}
+.gn-header button:active {
+  background: alpha(white, 0.22);
+}
+.gn-header button:disabled {
+  color: alpha(white, 0.45);
+}
+.gn-header popover button {
+  color: inherit;
+}
+.gn-header popover button:hover {
+  background: alpha(currentColor, 0.07);
+}
+.gn-header popover button:checked {
+  background: alpha(currentColor, 0.12);
+}
+.gn-header popover button.danger {
+  color: @error_color;
+}
+.gn-header button.tool {
+  min-width: 38px;
+  min-height: 34px;
+  padding: 0;
+}
+.gn-header button.tool:checked,
+.gn-header togglebutton.side:checked {
+  background: white;
+  color: #2b5290;
+  box-shadow: 0 1px 3px alpha(black, 0.25);
+}
+.gn-header .toolgroup {
+  background: alpha(white, 0.10);
+  border-radius: 13px;
+  padding: 3px;
+}
+.gn-header .title-btn label {
+  font-weight: 600;
+  font-size: 1.04em;
+}
+.gn-header separator {
+  background: alpha(white, 0.28);
+  margin: 12px 6px;
+}
+
+/* ---- canvas and floating bars ------------------------------------------- */
+
+.canvas {
+  background: shade(@window_bg_color, 0.9);
+}
+
+.pill {
+  background: @popover_bg_color;
+  color: @popover_fg_color;
+  border-radius: 18px;
+  padding: 5px 7px;
+  box-shadow: 0 6px 20px alpha(black, 0.10), 0 1px 3px alpha(black, 0.12), 0 0 0 1px alpha(black, 0.05);
+}
+.pill button {
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+  border-radius: 12px;
+  font-weight: normal;
+  transition: background 140ms ease, box-shadow 140ms ease;
+}
+.pill button:checked {
+  background: alpha(currentColor, 0.11);
+}
+.pill button.drop {
+  min-width: 0;
+  background: alpha(@accent_bg_color, 0.16);
+}
+.pill button.drop:hover {
+  background: alpha(@accent_bg_color, 0.26);
+}
+.pill button.swatch,
+popover button.swatch {
+  border-radius: 999px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+}
+.pill menubutton.current > button,
+.pill menubutton.weight > button,
+popover button.swatch.current {
+  background: alpha(currentColor, 0.13);
+}
+.pill separator {
+  margin: 9px 7px;
+  background: alpha(currentColor, 0.14);
+}
+.pill > label {
+  opacity: 0.7;
+  font-size: 0.93em;
+}
+
+.gn-header .tab-count {
+  background: alpha(white, 0.22);
+  border-radius: 999px;
+  padding: 0 7px;
+  font-size: 0.82em;
+  font-weight: bold;
+  margin-left: 2px;
+}
+.tabstrip {
+  padding: 4px 10px 5px 10px;
+  background: #2f568d;
+  color: white;
+}
+.tabstrip .tab button {
+  color: white;
+}
+.tabstrip .tab {
+  border-radius: 9px;
+  background: alpha(currentColor, 0.06);
+}
+.tabstrip .tab.current {
+  background: alpha(currentColor, 0.17);
+}
+.tabstrip .tab button {
+  min-height: 26px;
+  padding: 0 8px;
+  font-weight: normal;
+  background: none;
+}
+.tabstrip .tab.current button label {
+  font-weight: bold;
+}
+
+.crumbs button {
+  padding: 2px 6px;
+  min-height: 24px;
+  font-weight: normal;
+  opacity: 0.75;
+}
+.crumbs image, .crumbs > widget {
+  opacity: 0.5;
+}
+
+.minimap {
+  background: @popover_bg_color;
+  color: @popover_fg_color;
+  border-radius: 16px;
+  box-shadow: 0 6px 20px alpha(black, 0.12), 0 1px 3px alpha(black, 0.12), 0 0 0 1px alpha(black, 0.05);
+}
+.minimap button {
+  border-radius: 0;
+  min-height: 34px;
+  font-weight: normal;
+  font-feature-settings: "tnum";
+}
+.minimap separator {
+  margin: 0;
+  background: alpha(currentColor, 0.10);
+}
+
+.status {
+  background: @popover_bg_color;
+  color: alpha(@popover_fg_color, 0.8);
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-size: 0.9em;
+  font-feature-settings: "tnum";
+  margin: 14px;
+  box-shadow: 0 3px 12px alpha(black, 0.10), 0 0 0 1px alpha(black, 0.06);
+}
+
+/* ---- popovers ----------------------------------------------------------- */
+
+/* When a panel does have to scroll, give fingers a bar they can actually grab. */
+popover scrollbar slider {
+  min-width: 10px;
+  min-height: 48px;
+}
+popover scale {
+  min-height: 34px;
+}
+popover scale slider {
+  min-width: 24px;
+  min-height: 24px;
+}
+
+popover > contents {
+  border-radius: 16px;
+}
+popover button.choice {
+  border-radius: 12px;
+  font-weight: normal;
+  transition: background 140ms ease, box-shadow 140ms ease;
+}
+popover button.choice:checked {
+  background: @card_bg_color;
+  box-shadow: 0 0 0 1px alpha(black, 0.07), 0 2px 6px alpha(black, 0.10);
+}
+popover button.tile {
+  border-radius: 12px;
+  padding: 0 2px;
+  font-weight: normal;
+  background: alpha(currentColor, 0.05);
+}
+popover button.tile:hover {
+  background: alpha(currentColor, 0.10);
+}
+popover button.pill-button {
+  border-radius: 999px;
+  padding: 2px 14px;
+  min-height: 28px;
+  font-weight: normal;
+}
+popover button.menu-row {
+  padding: 8px 12px;
+  border-radius: 9px;
+  font-weight: normal;
+}
+button.danger,
+popover button.danger {
+  color: @error_color;
+  font-weight: normal;
+}
+popover.menu separator {
+  margin: 5px 6px;
+}
+popover .linked button {
+  font-weight: normal;
+}
+
+/* ---- editor sidebar ----------------------------------------------------- */
+
+.sidebar {
+  background: @sidebar_bg_color;
+}
+.thumbs flowboxchild {
+  padding: 8px 4px 2px 4px;
+  border-radius: 12px;
+  transition: background 140ms ease;
+}
+.thumbs flowboxchild:hover {
+  background: alpha(currentColor, 0.05);
+}
+.thumbs flowboxchild:selected {
+  background: none;
+}
+.thumbs flowboxchild:selected .thumb {
+  box-shadow: 0 0 0 2px @accent_bg_color, 0 2px 8px alpha(@accent_bg_color, 0.3);
+}
+.thumbs flowboxchild label {
+  font-size: 0.86em;
+  opacity: 0.7;
+}
+.thumb {
+  background: white;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px alpha(black, 0.12), 0 2px 6px alpha(black, 0.14);
+}
+.mark {
+  color: #e5484d;
+}
+button.add-page {
+  border-radius: 12px;
+  background: alpha(currentColor, 0.06);
+  box-shadow: inset 0 0 0 1px alpha(currentColor, 0.10);
+  font-weight: normal;
+}
+button.add-page:hover {
+  background: alpha(currentColor, 0.10);
+}
+
+/* ---- paper chooser ------------------------------------------------------ */
+
+.papers flowboxchild {
+  padding: 8px 2px;
+  border-radius: 12px;
+  transition: background 140ms ease;
+}
+.papers flowboxchild:hover {
+  background: alpha(currentColor, 0.05);
+}
+.papers flowboxchild:selected {
+  background: none;
+  color: @accent_color;
+}
+.papers flowboxchild:selected .thumb {
+  box-shadow: 0 0 0 2px @accent_bg_color, 0 2px 8px alpha(@accent_bg_color, 0.3);
+}
+.dialog-side entry {
+  min-height: 38px;
+}
+
+/* ---- library ------------------------------------------------------------ */
+
+.library {
+  background: @view_bg_color;
+}
+.library headerbar {
+  background: none;
+  box-shadow: none;
+  min-height: 52px;
+}
+.library-side {
+  background: linear-gradient(170deg, mix(@sidebar_bg_color, @accent_bg_color, 0.05), @sidebar_bg_color 60%);
+  padding: 10px 14px;
+  border-right: 1px solid alpha(currentColor, 0.07);
+}
+.library-side .brand {
+  font-size: 1.7em;
+  font-weight: 700;
+  letter-spacing: -0.6px;
+  margin: 22px 12px 26px 12px;
+}
+.library-side list {
+  background: none;
+}
+.library-side row {
+  border-radius: 999px;
+  padding: 11px 18px;
+  margin: 3px 0;
+  font-size: 1.12em;
+  transition: background 160ms ease;
+}
+.library-side row:hover {
+  background: alpha(currentColor, 0.05);
+}
+.library-side row:selected {
+  background: alpha(currentColor, 0.10);
+  color: inherit;
+  font-weight: 600;
+}
+.library-title {
+  font-size: 2.5em;
+  font-weight: 800;
+  letter-spacing: -0.8px;
+}
+.library flowboxchild {
+  border-radius: 16px;
+  padding: 14px 4px 10px 4px;
+  transition: background 180ms ease;
+}
+.library flowboxchild.picked,
+.library flowboxchild.picked:hover {
+  background: alpha(@accent_bg_color, 0.18);
+  box-shadow: inset 0 0 0 2px alpha(@accent_bg_color, 0.75);
+}
+.library flowboxchild:hover {
+  background: alpha(currentColor, 0.04);
+}
+.library flowboxchild button {
+  font-weight: normal;
+}
+.library flowboxchild menubutton label {
+  font-size: 1.06em;
+}
+.library flowboxchild .caption {
+  font-size: 0.86em;
+}
+.cover {
+  background: white;
+  border-radius: 5px;
+  box-shadow: 0 0 0 1px alpha(black, 0.08), 0 1px 2px alpha(black, 0.10), 0 8px 20px alpha(black, 0.14);
+}
+.folder-art {
+  filter: drop-shadow(0 4px 8px alpha(black, 0.14));
+}
+button.pill-btn,
+menubutton.pill-btn > button {
+  border-radius: 999px;
+  padding: 7px 18px;
+  font-weight: 600;
+}
+dropdown.pill-drop > button {
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-weight: normal;
+}
+searchbar entry, entry.round {
+  border-radius: 999px;
+}
+button.star {
+  min-width: 0;
+  min-height: 0;
+  padding: 5px;
+  border-radius: 999px;
+  color: alpha(currentColor, 0.38);
+}
+button.star.on {
+  color: #e8563f;
+}
+menubutton.busy > button {
+  color: @accent_color;
+}
+button.choice-cell {
+  border-radius: 12px;
+  padding: 6px;
+  min-width: 0;
+  min-height: 0;
+}
+.emoji {
+  font-size: 1.5em;
+}
+button.cover-choice {
+  padding: 4px;
+  border-radius: 8px;
+  min-width: 0;
+  min-height: 0;
+}
+button.cover-choice:checked {
+  background: alpha(@accent_bg_color, 0.25);
+  box-shadow: 0 0 0 2px @accent_bg_color;
+}
+button.cover-color {
+  padding: 3px;
+  border-radius: 999px;
+  min-width: 0;
+  min-height: 0;
+}
+button.cover-color:checked {
+  box-shadow: 0 0 0 2px @accent_bg_color;
+}
+
+/* The one-pixel popup that makes the compositor look for the pen again; see Canvas._nudge. */
+popover.nudge > contents {
+  background: none;
+  box-shadow: none;
+  border: none;
+  padding: 0;
+  min-width: 1px;
+  min-height: 1px;
+}
+
+/* Where dragged items can be dropped. */
+.library flowboxchild:drop(active),
+.crumbs button:drop(active),
+.library button.circular:drop(active) {
+  background: alpha(@accent_bg_color, 0.28);
+  box-shadow: inset 0 0 0 2px @accent_bg_color;
+  opacity: 1;
+}

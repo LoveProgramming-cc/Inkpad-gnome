@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Never publish credentials, tokens, settings or logs, wherever they turn up
+google_client*.json
+google_token*.json
+client_secret*.json
+*token*.json
+settings.json
+.sync.json
+input.log
+pen_probe.log
+
+# Notebooks, imports and exports belong to the user, not to the source
+*.inkpad
+*.goodnotes
+*.pdf
+*.zip
+
+# Local tooling
+.claude/
+.vscode/
+.idea/
+*.swp
+*~
