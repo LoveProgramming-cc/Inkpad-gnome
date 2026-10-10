@@ -722,14 +722,16 @@ def _sync(root, drive, skip, progress, only, thorough):
                 names.setdefault(f['name'], i)
         state['checked'] = time.time()
     mine_was = copy.deepcopy(cloud)        # and as this sync started out with it
+    mended = cloud != read                 # whether looking at Drive showed the index to be wrong
     saved_at = [time.monotonic()]
     sent = set()                           # ids of the notebooks this sync uploaded
 
     def publish():
         """Write the index. It is read again first: whatever another device changed in it while
         this sync was running is kept, wherever this sync did not change the same thing."""
-        nonlocal index_id, read, mine_was
-        if index_id is not None and cloud == mine_was:
+        nonlocal index_id, read, mine_was, mended
+        if index_id is not None and cloud == mine_was and not mended:
+            state['index'] = index_id   # found, if not written: remembered all the same
             return   # nothing to write down
         if index_id is None:
             index_id = drive.find(INDEX_NAME, root_id)
@@ -744,6 +746,7 @@ def _sync(root, drive, skip, progress, only, thorough):
         index_id = state['index'] = drive.put_json(INDEX_NAME, cloud, root_id, index_id)
         read = copy.deepcopy(cloud)
         mine_was = copy.deepcopy(cloud)
+        mended = False
 
     def checkpoint():
         """Write down, in the cloud and here, what has been done so far, so that a sync that is
@@ -856,6 +859,9 @@ def _sync(root, drive, skip, progress, only, thorough):
             local_same = base_local is not None and mine == base_local
             cloud_same = base is not None and entry.get('md5') == base
             if mine == entry.get('md5') or (local_same and cloud_same):
+                if thorough and any(b[2] not in names for b in ((before or {}).get('blobs') or {}).values()):
+                    push(nid, entry)   # a PDF or picture of it is gone from Drive: it is sent again
+                    return
                 agreed.setdefault(nid, (mine, stat))
                 return
             if cloud_same:
