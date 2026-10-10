@@ -477,10 +477,12 @@ def cloud_folder(root):
     return _load(os.path.join(root, '.sync.json'), {}).get('root') or ''
 
 
-def sync(root, drive, skip=(), progress=None):
+def sync(root, drive, skip=(), progress=None, only=None):
     """Merge the library folder with the Drive index; returns a summary dict.
 
-    skip is a collection of absolute paths to leave alone (a notebook being edited).
+    skip is a collection of absolute paths to leave alone. only, when given, is a collection
+    of absolute paths: nothing but those notebooks is looked at, which takes a few requests
+    and is what an open notebook is kept up to date with while it is being written in.
     progress(fraction, text) reports how far along the sync is: one step for reading the
     index, one per notebook (advancing with the bytes of its transfer) and one for the end.
     """
@@ -524,6 +526,8 @@ def sync(root, drive, skip=(), progress=None):
         """Write the index. It is read again first: whatever another device changed in it while
         this sync was running is kept, wherever this sync did not change the same thing."""
         nonlocal index_id, read, mine_was
+        if index_id is not None and cloud == mine_was:
+            return   # nothing to write down
         if index_id is None:
             index_id = drive.find(INDEX_NAME, root_id)
         latest = drive.get_json(index_id) if index_id else {}
@@ -552,12 +556,15 @@ def sync(root, drive, skip=(), progress=None):
 
     # What is on this device: id -> [absolute path, relative path, in trash?].
     skip = {os.path.abspath(p) for p in skip}
+    only = None if only is None else {os.path.abspath(p) for p in only}
     skip_ids = set()
     local = {}
     files, _ = _scan(root)
     trashed = {name: os.path.join(trash_dir, name) for name in sorted(os.listdir(trash_dir)) if name.endswith(EXT)}
     for rel, path, in_trash in [(r, p, False) for r, p in sorted(files.items())] + \
                               [(n, p, True) for n, p in trashed.items()]:
+        if only is not None and os.path.abspath(path) not in only:
+            continue
         try:
             nid = notebook_id(path)
         except Exception:
@@ -648,7 +655,7 @@ def sync(root, drive, skip=(), progress=None):
             base, mine_sent = entry['md5'], False   # what is here now has all of that version in it
         raise DriveError(tr('“%s”在同步时一直被其它设备更改，请稍后再同步') % os.path.basename(path))
 
-    ids = sorted(set(local) | set(items) | set(known))
+    ids = sorted(set(local) | set(items) | set(known)) if only is None else sorted(local)
     steps = len(ids) + 2
     moved = 0
     for n, nid in enumerate(ids):
@@ -724,6 +731,11 @@ def sync(root, drive, skip=(), progress=None):
             checkpoint()
 
     drive.on_bytes = None
+    if only is not None:
+        publish()
+        _save(state_path, state)
+        report(1.0, '')
+        return summary
     report((steps - 1) / steps, tr('正在更新云端目录…'))
     # Folders, so that empty ones and their removal carry over too.
     folders = cloud.setdefault('folders', {})  # relative path -> deleted?

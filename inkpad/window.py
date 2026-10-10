@@ -94,6 +94,10 @@ class Window(Adw.ApplicationWindow):
 
         self._sync_busy = False
         self._sync_error = None
+        self._sync_next = None    # a sync asked for while one was running: (quiet, only the open notebook?)
+        self._edit_timer = 0      # runs out a moment after the last stroke: the open notebook is synced
+        self._open_synced = 0.0   # when the open notebook was last synced, and how long that took
+        self._open_took = 0.0
         self.library = LibraryView(self.store, self.st, self.open_notebook, self._import_to_library, self._error,
                                    self._cloud_popover, self.show_settings)
         self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE, transition_duration=160)
@@ -118,12 +122,44 @@ class Window(Adw.ApplicationWindow):
         # is written on another device turns up in it.
         GLib.timeout_add_seconds(2, lambda: self.sync_now(True) and False)
         GLib.timeout_add_seconds(600, self._periodic_sync)
+        GLib.timeout_add_seconds(30, self._watch_open)
 
     def _periodic_sync(self):
         if self.get_application() is None:
             return False   # this window was replaced or closed
         self.sync_now(True)
         return True
+
+    # A notebook that is open is one that is being worked on: it is synced by itself when it is
+    # opened, a moment after every pause in writing, and looked up on Drive twice a minute for
+    # what other devices wrote. Only that notebook is touched, so this costs a few requests.
+
+    def _watch_open(self):
+        if self.get_application() is None:
+            return False
+        if self.in_editor() and self.is_active() and not self._edit_timer:
+            self._sync_open()
+        return True
+
+    def _sync_open(self):
+        if self.in_editor() and self.doc is not None and self.doc.path and gdrive.connected():
+            self.sync_now(True, only=True)
+
+    def _sync_after_edit(self):
+        """Sync the open notebook once the pen has rested: after the autosave, and not sooner
+        after the last sync than that one took, so that a large notebook is not sent non-stop."""
+        if self._edit_timer:
+            GLib.source_remove(self._edit_timer)
+        wait = max(6.0, self._open_synced + 4 * self._open_took - time.monotonic())
+        self._edit_timer = GLib.timeout_add(int(wait * 1000), self._edit_sync)
+
+    def _edit_sync(self):
+        self._edit_timer = 0
+        if self.canvas._op is not None or self._sync_busy:
+            self._sync_after_edit()
+        else:
+            self._sync_open()
+        return False
 
     def change_language(self, value):
         """Switch the interface language now, by rebuilding the window in place."""
@@ -1306,6 +1342,8 @@ class Window(Adw.ApplicationWindow):
             self.redo_btn.set_sensitive(bool(self.doc.redo_stack))
             if self.doc.modified:
                 self._schedule_save()
+                if gdrive.connected():
+                    self._sync_after_edit()
         elif kind in ('pages', 'meta'):
             self._update_status()
 
@@ -1552,10 +1590,18 @@ class Window(Adw.ApplicationWindow):
 
     # -- Google Drive -------------------------------------------------------
 
-    def sync_now(self, quiet=False):
-        """Sync the library with Google Drive in the background."""
-        if self._sync_busy or not gdrive.connected():
+    def sync_now(self, quiet=False, only=False):
+        """Sync the library with Google Drive in the background, or with only=True just the
+        notebook that is open."""
+        if not gdrive.connected():
             return
+        if self._sync_busy:
+            # Not forgotten: it runs when this one is over. The whole library outranks one notebook.
+            was = self._sync_next
+            self._sync_next = (quiet and (was is None or was[0]), only and (was is None or was[1]))
+            return
+        only = only and self.in_editor() and self.doc is not None and bool(self.doc.path)
+        began = time.monotonic()
         self._sync_busy = True
         self.library.set_syncing(True)
         if getattr(self, '_cloud_fill', None):
@@ -1567,13 +1613,14 @@ class Window(Adw.ApplicationWindow):
             self.save_now()
         skip = []
         root = self.store.root
+        which = [self.doc.path] if only else None
 
         def progress(fraction, text):
             GLib.idle_add(lambda: self.library.set_sync_progress(fraction, text) and False)
 
         def work():
             try:
-                result, error = gdrive.sync(root, gdrive.Drive(), skip, progress), None
+                result, error = gdrive.sync(root, gdrive.Drive(), skip, progress, which), None
             except Exception as exc:
                 result, error = None, exc
             GLib.idle_add(done, result, error)
@@ -1587,6 +1634,12 @@ class Window(Adw.ApplicationWindow):
             # Even a sync that failed may have brought something for the open notebook.
             if self._follow_sync():
                 GLib.timeout_add(400, self._follow_sync)
+            self._open_synced = time.monotonic()
+            if only:
+                self._open_took = self._open_synced - began
+            if self._sync_next is not None:
+                (again_quiet, again_only), self._sync_next = self._sync_next, None
+                GLib.idle_add(lambda: self.sync_now(again_quiet, again_only) and False)
             if error is not None:
                 if not quiet:
                     self.toast(tr('同步失败：%s') % error)
@@ -1733,6 +1786,7 @@ class Window(Adw.ApplicationWindow):
         memo = self.st.get('views', {}).get(tab['doc'].id)
         if memo is not None and tab['view'] is None:
             self.canvas.restore_memo(memo)
+        self._sync_open()   # so that it shows what other devices wrote in it
 
     def _current_tab(self):
         return next((t for t in self.tabs if t['doc'] is self.doc), None)
