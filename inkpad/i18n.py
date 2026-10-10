@@ -243,6 +243,7 @@ EN = {
     '“%s”缺少它的 PDF 或图片，暂时无法补全：%s': '“%s” is missing its PDFs or pictures and could not be completed for now: %s',
     '从云端下载的 PDF 或图片（%s）内容不对，没有使用它。请再同步一次。': 'A PDF or picture downloaded from the cloud (%s) did not have the right content and was not used. Please sync again.',
     '上传的 PDF 或图片在云端的校验值不对，请再同步一次': 'A PDF or picture arrived in the cloud with the wrong checksum; please sync again',
+    '上传的笔记本在云端的校验值不对，请再同步一次': 'The notebook arrived in the cloud with the wrong checksum; please sync again',
     '凭据已保存': 'Credentials saved',
     '创建白板': 'Create whiteboard',
     '创建笔记本': 'Create notebook',

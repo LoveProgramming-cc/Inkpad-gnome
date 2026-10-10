@@ -1614,13 +1614,18 @@ class Window(Adw.ApplicationWindow):
         skip = []
         root = self.store.root
         which = [self.doc.path] if only else None
+        # Thorough when the user asks for a sync, and once when the app has started; quick
+        # otherwise (the sync decides for itself when it is time to look again): see gdrive.sync().
+        thorough = True if not quiet or not getattr(self, '_sync_checked', False) else None
+        if not only:
+            self._sync_checked = True
 
         def progress(fraction, text):
             GLib.idle_add(lambda: self.library.set_sync_progress(fraction, text) and False)
 
         def work():
             try:
-                result, error = gdrive.sync(root, gdrive.Drive(), skip, progress, which), None
+                result, error = gdrive.sync(root, gdrive.Drive(), skip, progress, which, thorough), None
             except Exception as exc:
                 result, error = None, exc
             GLib.idle_add(done, result, error)
