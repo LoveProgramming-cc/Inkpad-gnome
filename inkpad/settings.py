@@ -39,6 +39,7 @@ DEFAULTS = {
     'mouse_hand': True,
     'paging': 'vertical',
     'scrollbars': True,
+    'sync_every': 30,
     'max_zoom': 6.0,
     'hidden_tools': [],
     'crosshair': True,

@@ -503,4 +503,13 @@ EN = {
     '找不到 libpoppler-glib：': 'libpoppler-glib not found: ',
     'PDF 无法打开': 'The PDF could not be opened',
     'PDF 页面 %d 不存在': 'PDF page %d does not exist',
+    '5 秒': '5 seconds',
+    '10 秒': '10 seconds',
+    '15 秒': '15 seconds',
+    '30 秒': '30 seconds',
+    '1 分钟': '1 minute',
+    '2 分钟': '2 minutes',
+    '5 分钟': '5 minutes',
+    '打开的笔记本多久同步一次': 'How often the open notebook is synced',
+    '每隔这么久查看一次其它设备写了什么；自己写的内容在停笔几秒后就会同步，与这里无关': 'How often to look for what other devices wrote. What you write here is synced a few seconds after you pause, whatever this says',
 }

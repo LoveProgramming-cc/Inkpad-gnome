@@ -122,7 +122,8 @@ class Window(Adw.ApplicationWindow):
         # is written on another device turns up in it.
         GLib.timeout_add_seconds(2, lambda: self.sync_now(True) and False)
         GLib.timeout_add_seconds(600, self._periodic_sync)
-        GLib.timeout_add_seconds(30, self._watch_open)
+        self._watch_timer = 0
+        self.watch_open()
 
     def _periodic_sync(self):
         if self.get_application() is None:
@@ -131,13 +132,24 @@ class Window(Adw.ApplicationWindow):
         return True
 
     # A notebook that is open is one that is being worked on: it is synced by itself when it is
-    # opened, a moment after every pause in writing, and looked up on Drive twice a minute for
-    # what other devices wrote. Only that notebook is touched, so this costs a few requests.
+    # opened, a moment after every pause in writing, and looked up on Drive every half minute, or
+    # as often as the settings say, for what other devices wrote. Only that notebook is touched,
+    # so this costs a few requests.
+
+    def watch_open(self):
+        """Start looking, or start again when the interval was changed in the settings."""
+        if self._watch_timer:
+            GLib.source_remove(self._watch_timer)
+        every = min(300, max(5, int(self.st.get('sync_every', 30))))
+        self._watch_timer = GLib.timeout_add_seconds(every, self._watch_open)
 
     def _watch_open(self):
         if self.get_application() is None:
+            self._watch_timer = 0
             return False
-        if self.in_editor() and self.is_active() and not self._edit_timer:
+        # A look that comes while a sync is still running is left out, so that a short interval
+        # does not queue them up.
+        if self.in_editor() and self.is_active() and not self._edit_timer and not self._sync_busy:
             self._sync_open()
         return True
 

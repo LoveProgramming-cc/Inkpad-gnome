@@ -316,6 +316,11 @@ class PrefsDialog(Adw.PreferencesDialog):
             Gio.File.new_for_path(os.path.dirname(gdrive.CLIENT_PATH)).get_uri(), None))
         self.client_where.add_suffix(folder)
         drive.add(self.client_where)
+        drive.add(_combo(tr('打开的笔记本多久同步一次'),
+                         tr('每隔这么久查看一次其它设备写了什么；自己写的内容在停笔几秒后就会同步，与这里无关'),
+                         [(5, '5 秒'), (10, '10 秒'), (15, '15 秒'), (30, '30 秒'), (60, '1 分钟'), (120, '2 分钟'), (300, '5 分钟')],
+                         int(st.get('sync_every', 30)),
+                         lambda value: (win._set(st, 'sync_every', value), win.watch_open())))
         self.status = Adw.ActionRow(title=tr('状态'))
         self.connect_btn = Gtk.Button(valign=Gtk.Align.CENTER)
         self.connect_btn.connect('clicked', self._toggle_connection)
