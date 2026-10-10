@@ -484,6 +484,8 @@ EN = {
     '页面本身始终保持纸张颜色': 'Pages always keep their paper colour',
     '顺时针旋转': 'Rotate clockwise',
     '“%s”在同步时一直被其它设备更改，请稍后再同步': '“%s” kept being changed by another device during the sync; please sync again later',
+    '云端缺少这本笔记里的一个 PDF 或图片（%s）。请在仍有这本笔记的设备上同步一次。': 'A PDF or picture of this notebook is missing from the cloud (%s). Please sync once on a device that still has the notebook.',
+    '云端的笔记是由更新版本的 Inkpad 同步的，请先更新这台设备上的 Inkpad': 'The notes in the cloud were synced by a newer version of Inkpad; please update Inkpad on this device first',
     '（云端副本）': ' (cloud copy)',
     # Paper names and other strings that live in the model.
     '基本样式': 'Basic', '书写用纸': 'Writing', '日程与计划': 'Planning', '音乐与棋类': 'Music and games',

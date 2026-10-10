@@ -21,6 +21,11 @@ about a notebook's content: what counts is the checksum Drive itself reports for
 file, asked for again just before the file is replaced. A device that finds another
 has been there first merges instead of overwriting, and the index is read again
 before it is written, so that what others put in it meanwhile is kept.
+
+A notebook's large PDFs and pictures are not part of the file that is uploaded for it.
+They never change, and they are nearly all of a large notebook's size, so each is kept
+on Drive once, as a file of its own named after its checksum and size, and the notebook's
+file lists them. Writing a line in a 200 MB textbook then sends the ink, not the book.
 """
 import base64
 import copy
@@ -35,6 +40,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import zipfile
 
 from gi.repository import GLib
 
@@ -409,6 +415,97 @@ def _md5(path):
     return digest.hexdigest()
 
 
+def _stat(path):
+    """What tells one writing of a file from the next, for remembering its checksum by."""
+    st = os.stat(path)
+    return '%d/%d' % (st.st_mtime_ns, st.st_size)
+
+
+BLOB_MIN = 256 * 1024   # a PDF or picture at least this big is kept on Drive as a file of its own
+BLOBS = 'blobs.json'    # in an uploaded notebook: {name in the zip: name of the file on Drive}
+FORMAT = 2              # of the index; 2 is the one in which notebooks are uploaded without their blobs
+
+
+def _is_blob(info):
+    return info.filename.startswith(('pdf/', 'img/')) and info.file_size >= BLOB_MIN
+
+
+def _blob_name(info):
+    return 'blob-%08x-%d' % (info.CRC, info.file_size)
+
+
+def _slim(path, dest, have):
+    """Write to dest the notebook as it is uploaded: without its large PDFs and pictures, and
+    with a list of them instead. Those for which have(name) is false are written next to
+    dest, to be uploaded first. Returns (the whole file's checksum, its _stat(), {name of
+    the blob: where it was written}).
+
+    The file is opened once, so all of this is about one version of it even if it is saved
+    again meanwhile."""
+    out, listed, digest = {}, {}, hashlib.md5()
+    with open(path, 'rb') as f:
+        st = os.fstat(f.fileno())
+        for block in iter(lambda: f.read(1 << 20), b''):
+            digest.update(block)
+        with zipfile.ZipFile(f) as z, zipfile.ZipFile(dest, 'w', zipfile.ZIP_DEFLATED) as slim:
+            for info in z.infolist():
+                if info.filename == BLOBS:
+                    continue
+                if not _is_blob(info):
+                    slim.writestr(info, z.read(info))
+                    continue
+                name = listed[info.filename] = _blob_name(info)
+                if name not in out and not have(name):
+                    out[name] = '%s.%s' % (dest, name)
+                    with z.open(info) as src, open(out[name], 'wb') as dst:
+                        shutil.copyfileobj(src, dst, 1 << 20)
+            if listed:
+                slim.writestr(BLOBS, json.dumps(listed))
+    return digest.hexdigest(), '%d/%d' % (st.st_mtime_ns, st.st_size), out
+
+
+def _fatten(part, have, fetch):
+    """Make a downloaded notebook whole again: its large PDFs and pictures are taken from the
+    copy of it that is here already (have, a path or None) where that has them, and
+    downloaded with fetch(name of the blob, where to) otherwise."""
+    with zipfile.ZipFile(part) as z:
+        if BLOBS not in z.namelist():
+            return   # uploaded whole, by an earlier version
+        listed = json.loads(z.read(BLOBS))
+        full = part + '.full'
+        old = zipfile.ZipFile(have) if have and os.path.exists(have) else None
+        try:
+            here = {_blob_name(info): info for info in old.infolist() if _is_blob(info)} if old else {}
+            with zipfile.ZipFile(full, 'w', zipfile.ZIP_DEFLATED) as out:
+                for info in z.infolist():
+                    if info.filename != BLOBS:
+                        out.writestr(info, z.read(info))
+                for name, blob in listed.items():
+                    # Stored, as the app itself writes them: they are compressed already.
+                    with out.open(zipfile.ZipInfo(name), 'w', force_zip64=True) as dst:
+                        if blob in here:
+                            with old.open(here[blob]) as src:
+                                shutil.copyfileobj(src, dst, 1 << 20)
+                        else:
+                            fetch(blob, full + '.blob')
+                            with open(full + '.blob', 'rb') as src:
+                                shutil.copyfileobj(src, dst, 1 << 20)
+                            os.remove(full + '.blob')
+        finally:
+            if old:
+                old.close()
+    os.replace(full, part)
+
+
+def _fetcher(drive, root_id, names):
+    def fetch(blob, dest):
+        file_id = names.get(blob) or drive.find(blob, root_id)
+        if not file_id:
+            raise DriveError(tr('云端缺少这本笔记里的一个 PDF 或图片（%s）。请在仍有这本笔记的设备上同步一次。') % blob)
+        drive.download(file_id, dest)
+    return fetch
+
+
 def _unique(path):
     base, ext = os.path.splitext(path)
     n = 2
@@ -503,7 +600,15 @@ def sync(root, drive, skip=(), progress=None, only=None):
     if index_id not in live:
         index_id = next((i for i, f in live.items() if f.get('name') == INDEX_NAME), None)
     cloud = drive.get_json(index_id) if index_id else {}
+    if cloud.get('format', 1) > FORMAT:
+        raise DriveError(tr('云端的笔记是由更新版本的 Inkpad 同步的，请先更新这台设备上的 Inkpad'))
     items = cloud.setdefault('items', {})  # id -> {'path', 'trashed', 'md5', 'file', 'deleted', 'ts'}
+    names = {f.get('name'): i for i, f in live.items()}   # of the files on Drive, for finding blobs
+    fetch = _fetcher(drive, root_id, names)
+    work_dir = os.path.join(root, '.sync')
+    shutil.rmtree(work_dir, ignore_errors=True)   # whatever a sync that was cut off left behind
+    os.makedirs(work_dir, exist_ok=True)
+    agreed = {}   # id -> (checksum, _stat()) of the local file that matches the cloud's version
     read = copy.deepcopy(cloud)            # the index as it was read, to tell later what others changed
     for nid in [n for n, e in items.items() if e.get('file') not in live]:
         if items[nid].get('deleted'):
@@ -593,38 +698,64 @@ def sync(root, drive, skip=(), progress=None, only=None):
         rel = os.path.basename(target) if in_trash else os.path.relpath(target, root).replace(os.sep, '/')
         local[nid] = [target, rel, in_trash]
 
-    def push(nid, entry, mine):
+    def local_md5(nid, path):
+        """(checksum, _stat()) of a notebook here. The checksum is the remembered one while the
+        file has not been written since: a large notebook is not read through at every sync."""
+        was, stat = known.get(nid) or {}, _stat(path)
+        if was.get('stat') == stat and was.get('local'):
+            return was['local'], stat
+        return _md5(path), stat
+
+    def push(nid, entry):
         """Upload a local notebook's content and record it in the index entry."""
         path, rel, in_trash = local[nid]
-        file_id, theirs = drive.upload(path, os.path.basename(rel), root_id, entry.get('file'))
+        slim = os.path.join(work_dir, 'upload')
+        mine, stat, blobs = _slim(path, slim, lambda name: name in names)
+        for name, part in blobs.items():
+            # Each of these is uploaded once, whatever is written in the notebook afterwards.
+            names[name] = drive.upload(part, name, root_id, None)[0]
+            os.remove(part)
+        file_id, theirs = drive.upload(slim, os.path.basename(rel), root_id, entry.get('file'))
+        theirs = theirs or _md5(slim)
+        os.remove(slim)
         summary['up'] += 1
         sent.add(nid)
-        entry.update(file=file_id, md5=theirs or mine, path=rel, trashed=in_trash, deleted=False, ts=time.time())
+        agreed[nid] = (mine, stat)
+        cloud['format'] = FORMAT
+        entry.update(file=file_id, md5=theirs, path=rel, trashed=in_trash, deleted=False, ts=time.time())
 
     def settle(nid, entry, before):
         """Make a notebook and the cloud's version of it the same, losing nothing of either."""
         path = local[nid][0]
-        base = before['md5'] if before is not None else None   # what both sides last agreed on
+        # What both sides last agreed on: the cloud's file, and the one here that matched it.
+        # (They are not the same file: the cloud's is without the notebook's PDFs and pictures.)
+        base = before['md5'] if before is not None else None
+        base_local = (before.get('local') or before['md5']) if before is not None else None
         mine_sent = bool(before and before.get('sent'))        # ...which this device had written
         for _ in range(5):
-            mine = _md5(path)
-            if mine == entry.get('md5'):
+            mine, stat = local_md5(nid, path)
+            local_same = base_local is not None and mine == base_local
+            cloud_same = base is not None and entry.get('md5') == base
+            if mine == entry.get('md5') or (local_same and cloud_same):
+                agreed.setdefault(nid, (mine, stat))
                 return
-            if base is not None and entry.get('md5') == base:
+            if cloud_same:
                 # Only this device has changed it, as far as was known when the sync began.
                 # Another may have sent its own version since; uploading now would wipe that out.
                 now = drive.md5(entry['file']) if entry.get('file') else None
                 if now is None or now == base:
-                    push(nid, entry, mine)
+                    push(nid, entry)
                     return
                 entry['md5'] = now
                 continue
             theirs = path + '.theirs'
             drive.download(entry['file'], theirs)
             entry['md5'] = _md5(theirs)
+            _fatten(theirs, path, fetch)
             with file_lock:
-                untouched = base is not None and _md5(path) == base
+                untouched = local_same and _stat(path) == stat
                 if untouched and not mine_sent:
+                    agreed[nid] = (_md5(theirs), _stat(theirs))
                     os.replace(theirs, path)   # nothing here that the cloud's version lacks
                     summary['down'] += 1
                     return
@@ -635,6 +766,7 @@ def sync(root, drive, skip=(), progress=None, only=None):
                         # If another device wrote over that without having seen it, it is not;
                         # then what was written here is put back into it.
                         if not any(merge(their_doc, here_doc)):
+                            agreed[nid] = (_md5(theirs), _stat(theirs))
                             os.replace(theirs, path)
                             summary['down'] += 1
                             return
@@ -652,7 +784,8 @@ def sync(root, drive, skip=(), progress=None, only=None):
                     os.replace(theirs, conflict)
                     set_notebook_id(conflict, uuid.uuid4().hex)
                     summary['conflicts'] += 1
-            base, mine_sent = entry['md5'], False   # what is here now has all of that version in it
+            # What is here now has all of that version in it, and more.
+            base, base_local, mine_sent = entry['md5'], None, False
         raise DriveError(tr('“%s”在同步时一直被其它设备更改，请稍后再同步') % os.path.basename(path))
 
     ids = sorted(set(local) | set(items) | set(known)) if only is None else sorted(local)
@@ -674,7 +807,7 @@ def sync(root, drive, skip=(), progress=None, only=None):
             if here[2]:
                 continue
             entry = items[nid] = {}
-            push(nid, entry, _md5(here[0]))
+            push(nid, entry)
         elif here is None:
             if entry.get('deleted'):
                 known.pop(nid, None)
@@ -693,12 +826,14 @@ def sync(root, drive, skip=(), progress=None, only=None):
             os.makedirs(os.path.dirname(target), exist_ok=True)
             target = _unique(target)
             drive.download(entry['file'], target)
+            _fatten(target, None, fetch)
+            agreed[nid] = (_md5(target), _stat(target))
             local[nid] = [target, os.path.relpath(target, trash_dir if entry.get('trashed') else root)
                           .replace(os.sep, '/'), bool(entry.get('trashed'))]
             summary['down'] += 1
         else:
-            mine = _md5(here[0])
-            unchanged = before is not None and mine == before['md5']
+            mine = local_md5(nid, here[0])[0]
+            unchanged = before is not None and mine == (before.get('local') or before['md5'])
             if entry.get('deleted'):
                 if here[2] or unchanged:
                     # Deleted elsewhere and not edited here since: follow, into the trash.
@@ -706,8 +841,8 @@ def sync(root, drive, skip=(), progress=None, only=None):
                     known.pop(nid, None)
                     summary['removed'] += not here[2]
                     continue
-                push(nid, entry, mine)  # edited after the deletion: the edit wins
-            elif mine != entry.get('md5'):
+                push(nid, entry)  # edited after the deletion: the edit wins
+            else:
                 settle(nid, entry, before)
             # Name, folder and trash state travel separately from the content.
             where, there = (here[1], here[2]), (entry.get('path'), bool(entry.get('trashed')))
@@ -724,6 +859,10 @@ def sync(root, drive, skip=(), progress=None, only=None):
         entry.update(path=rel, trashed=in_trash)
         was = known.get(nid)
         known[nid] = {'path': rel, 'trashed': in_trash, 'md5': entry['md5']}
+        if nid in agreed:
+            known[nid]['local'], known[nid]['stat'] = agreed[nid]
+        elif was and was['md5'] == entry['md5'] and was.get('local'):
+            known[nid]['local'] = was['local']
         if nid in sent or (was and was.get('sent') and was['md5'] == entry['md5']):
             known[nid]['sent'] = True   # the cloud's version is the one this device wrote
         if summary['up'] + summary['down'] != moved:
@@ -731,6 +870,7 @@ def sync(root, drive, skip=(), progress=None, only=None):
             checkpoint()
 
     drive.on_bytes = None
+    shutil.rmtree(work_dir, ignore_errors=True)
     if only is not None:
         publish()
         _save(state_path, state)
@@ -799,7 +939,7 @@ def cloud_restore(root, drive, ids, progress=None):
     index_id = state.get('index') or drive.find(INDEX_NAME, root_id)
     cloud = drive.get_json(index_id) if index_id else {}
     items, known = cloud.get('items', {}), state.setdefault('items', {})
-    done = 0
+    done, fetch = 0, None
     for n, nid in enumerate(ids):
         entry = items.get(nid)
         if not entry or not entry.get('file'):
@@ -810,10 +950,13 @@ def cloud_restore(root, drive, ids, progress=None):
         target = _unique(os.path.join(root, *rel.split('/')))
         os.makedirs(os.path.dirname(target), exist_ok=True)
         drive.download(entry['file'], target)
+        if fetch is None:
+            fetch = _fetcher(drive, root_id, {f.get('name'): f['id'] for f in drive.children(root_id)})
+        _fatten(target, None, fetch)
         rel = os.path.relpath(target, root).replace(os.sep, '/')
         # It is a live notebook again, on both sides, with what the cloud holds.
         entry.update(deleted=False, trashed=False, path=rel, ts=time.time())
-        known[nid] = {'path': rel, 'trashed': False, 'md5': entry.get('md5')}
+        known[nid] = {'path': rel, 'trashed': False, 'md5': entry.get('md5'), 'local': _md5(target)}
         done += 1
     drive.on_bytes = None
     if done:
