@@ -15,7 +15,7 @@ from .dialogs import PaperDialog, ask_cover, ask_page, ask_text
 from .icons import Icon, TextureView
 from .minimap import Minimap
 from .library import LibraryView, Store, fitted, menu_popover
-from .model import Document, Image, Page, Stroke, export_pdf, export_png, find_text, page_surface
+from .model import Changed, Document, Image, Page, Stroke, export_pdf, export_png, find_text, notebook_id, page_surface
 from .prefs import PrefsDialog, apply_theme
 from .render import texture_from_surface
 from .sidebar import Sidebar
@@ -114,15 +114,15 @@ class Window(Adw.ApplicationWindow):
         self._rebuild_options()
         self._sync()
         self.library.refresh()
-        # Sync shortly after launch, then every ten minutes while the library is showing.
+        # Sync shortly after launch, then every ten minutes: an open notebook too, so that what
+        # is written on another device turns up in it.
         GLib.timeout_add_seconds(2, lambda: self.sync_now(True) and False)
         GLib.timeout_add_seconds(600, self._periodic_sync)
 
     def _periodic_sync(self):
         if self.get_application() is None:
             return False   # this window was replaced or closed
-        if not self.in_editor():
-            self.sync_now(True)
+        self.sync_now(True)
         return True
 
     def change_language(self, value):
@@ -1335,27 +1335,103 @@ class Window(Adw.ApplicationWindow):
         if self._save_thread is not None or self.canvas._op is not None:
             self._schedule_save()
             return False
-        snap, path = doc.snapshot(), doc.path
+        self._relocate(doc)
+        if not self._absorb(doc):
+            return False
+        snap, path, sign = doc.snapshot(), doc.path, doc.sign
 
         def work():
             try:
-                Document.write_snapshot(path, snap)
-                error = None
+                result, error = Document.write_snapshot(path, snap, sign), None
             except Exception as exc:
-                error = exc
-            GLib.idle_add(done, error)
+                result, error = None, exc
+            GLib.idle_add(done, result, error)
 
-        def done(error):
-            if self._save_thread is thread:
+        def done(result, error):
+            latest = self._save_thread is thread   # not so when save_now() has written since
+            if latest:
                 self._save_thread = None
-            if error is not None:
+            if isinstance(error, Changed):
+                # A sync wrote the file in the meantime. Nothing was written over it; what it
+                # brought is taken in first, and then this is saved again.
+                if doc is self.doc:
+                    self._schedule_save()
+            elif error is not None:
                 self.toast(tr('自动保存失败：%s') % error)
-            elif doc.saved_rev < snap['rev']:
-                doc.saved_rev = snap['rev']
+            else:
+                if latest and doc.path == path:
+                    doc.sign = result
+                if doc.saved_rev < snap['rev']:
+                    doc.saved_rev = snap['rev']
             return False
 
         thread = self._save_thread = threading.Thread(target=work, daemon=True)
         thread.start()
+        return False
+
+    def _absorb(self, doc):
+        """If a sync has written the open notebook's file, take in what it brought: merged into
+        what is on screen when that has unsaved changes, loaded afresh otherwise. False if
+        the file could not be read."""
+        if doc is None or not doc.stale():
+            return True
+        try:
+            if doc.modified or doc is not self.doc:
+                doc.absorb()
+                if doc is self.doc:
+                    self._update_status()
+                return True
+            fresh = Document.load(doc.path)
+        except Exception as exc:
+            self.toast(tr('无法打开笔记本') + ': %s' % exc)
+            return False
+        tab = self._current_tab()
+        view = self.canvas.view_state()
+        if tab is not None:
+            tab['doc'] = fresh
+        self.set_document(fresh)
+        self.canvas.restore_view(view)
+        return True
+
+    def _relocate(self, doc):
+        """Find the open notebook again after a sync renamed or moved its file, as another
+        device had; False if it is nowhere in the library any more."""
+        if doc.sign is None or not doc.path or os.path.exists(doc.path):
+            return True
+        for path in gdrive._scan(self.store.root)[0].values():
+            try:
+                same = notebook_id(path) == doc.id
+            except Exception:
+                same = False
+            if same:
+                doc.path, doc.sign = path, (0, 0)   # its content may be another too
+                if doc is self.doc:
+                    self._update_title()
+                return True
+        doc.sign = None   # gone: if it is written again, it is as a new file
+        return False
+
+    def _follow_sync(self):
+        """After a sync the open notebook may have been merged, replaced, moved or deleted."""
+        doc = self.doc
+        if doc is None or self._current_tab() is None:
+            return False
+        if self.canvas._op is not None:
+            return True   # in the middle of a stroke; look again in a moment
+        if doc.path and not os.path.exists(doc.path):
+            if self._relocate(doc):
+                self._absorb(doc)
+            elif not doc.modified:
+                # Deleted on another device: it is in the trash here now.
+                self.tabs = []
+                self._fill_tabs()
+                self.library.refresh()
+                self.stack.set_visible_child_name('library')
+                self.set_title(APP_NAME)
+                self.toast(tr('已删除'))
+            return False
+        if doc.stale():
+            self._absorb(doc)
         return False
 
     def save_now(self):
@@ -1371,6 +1447,7 @@ class Window(Adw.ApplicationWindow):
             return True   # it was trashed or moved from the library; do not write it back
         if doc is not None and doc.path and doc.modified:
             try:
+                self._relocate(doc)
                 doc.save()
             except Exception as exc:
                 self._error(tr('保存失败'), exc)
@@ -1483,10 +1560,12 @@ class Window(Adw.ApplicationWindow):
         self.library.set_syncing(True)
         if getattr(self, '_cloud_fill', None):
             self._cloud_fill()   # the cloud menu is open: it shows this sync's progress
-        # A notebook being edited is left alone; it syncs once it is closed.
-        # Notebooks open in tabs are in memory, so their files must not change underneath them.
+        # The open notebook syncs like any other. It is saved first; what the sync then does to
+        # its file is taken into the editor when the sync is over (and before any later save).
         self._prune_tabs()
-        skip = [t['doc'].path for t in self.tabs]
+        if self.in_editor() and self.canvas._op is None:
+            self.save_now()
+        skip = []
         root = self.store.root
 
         def progress(fraction, text):
@@ -1505,6 +1584,9 @@ class Window(Adw.ApplicationWindow):
             self._sync_error = None if error is None else str(error)
             if getattr(self, '_cloud_fill', None):
                 self._cloud_fill()   # the cloud menu is open: it stops saying that a sync is running
+            # Even a sync that failed may have brought something for the open notebook.
+            if self._follow_sync():
+                GLib.timeout_add(400, self._follow_sync)
             if error is not None:
                 if not quiet:
                     self.toast(tr('同步失败：%s') % error)

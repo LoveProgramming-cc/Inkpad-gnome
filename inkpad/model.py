@@ -10,6 +10,7 @@ import json
 import math
 import os
 import struct
+import threading
 import uuid
 import zipfile
 
@@ -771,6 +772,25 @@ def render_page(cr, page, printing=False, paper=True, ink=True):
 GONE_LIMIT = 20000
 
 
+# Held while a notebook file is compared with what is expected to be there and then replaced:
+# by an editor saving it, and by a sync putting another device's version in its place. Without
+# it either of the two could write over what the other had only just written.
+file_lock = threading.RLock()
+
+
+def file_sign(path):
+    """What tells one writing of a file from the next, or None when there is no file."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+class Changed(Exception):
+    """The file is no longer the one that the document was read from or last written to."""
+
+
 def _digest(text):
     return hashlib.md5(text.encode('utf-8')).hexdigest()[:16]
 
@@ -801,6 +821,7 @@ def merge(mine, theirs):
     mine.pages = [page for page in mine.pages if page.id not in gone_pages] or mine.pages[:1]
     counts[1] = before - len(mine.pages)
     other = {page.id: page for page in theirs.pages}
+    changed = False
     for page in mine.pages:
         their = other.get(page.id)
         if their is None or their is page:
@@ -815,10 +836,12 @@ def merge(mine, theirs):
             page.items = kept + new
             page.gone = gone
             page.rev += 1
-    mine.gone_pages = gone_pages
-    mine.undo_stack.clear()
-    mine.redo_stack.clear()
-    mine.rev += 1
+            changed = True
+    if changed or gone_pages != mine.gone_pages or any(counts):
+        mine.gone_pages = gone_pages
+        mine.undo_stack.clear()
+        mine.redo_stack.clear()
+        mine.rev += 1
     return tuple(counts)
 
 
@@ -930,6 +953,7 @@ class Document:
         self.id = uuid.uuid4().hex  # stable across renames and moves; what sync tracks
         self.gone_pages = set()     # ids of pages removed from the document
         self.cover_spec = None      # (style, colour) of a designed cover; None shows the first page
+        self.sign = None            # file_sign() of the file as this document last read or wrote it
 
     @property
     def modified(self):
@@ -1137,7 +1161,17 @@ class Document:
                 'images': list(ctx.images), 'cover': self.cover(), 'rev': self.rev, 'id': self.id}
 
     @staticmethod
-    def write_snapshot(path, snap):
+    def write_snapshot(path, snap, expect=None):
+        """Write the file and return its file_sign(). With expect, the sign the file had when
+        it was last read or written, Changed is raised if something else has written it since."""
+        with file_lock:
+            if expect is not None and file_sign(path) != expect:
+                raise Changed(path)
+            Document._write(path, snap)
+            return file_sign(path)
+
+    @staticmethod
+    def _write(path, snap):
         tmp = path + '.tmp'
         with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as z:
             z.writestr('document.json', snap['json'])
@@ -1151,15 +1185,38 @@ class Document:
                 z.writestr(zipfile.ZipInfo('img/%d.png' % i), data)
         os.replace(tmp, path)
 
+    def stale(self):
+        """Whether the file was written by something else (a sync) since this document read it."""
+        return self.path is not None and self.sign is not None and file_sign(self.path) not in (None, self.sign)
+
+    def absorb(self):
+        """Take in what something else wrote to the file, keeping what was done here since."""
+        with file_lock:
+            other = Document.load(self.path)
+            self.sign = other.sign
+        if any(merge(self, other)):
+            self.emit('pages')
+            for page in self.pages:
+                self.emit('dirty', page, None)
+        self.emit('state')
+
     def save(self, path=None):
-        snap = self.snapshot()
-        self.write_snapshot(path or self.path, snap)
-        self.path = path or self.path
+        target = path or self.path
+        with file_lock:
+            if target == self.path and self.stale():
+                try:
+                    self.absorb()   # never write over what a sync brought: fold it in first
+                except Exception:
+                    pass            # unreadable; this document is the better of the two
+            snap = self.snapshot()
+            self.sign = self.write_snapshot(target, snap)
+        self.path = target
         self.saved_rev = snap['rev']
         self.emit('state')
 
     @classmethod
     def load(cls, path):
+        sign = file_sign(path)
         with zipfile.ZipFile(path) as z:
             meta = json.loads(z.read('document.json'))
             if meta.get('format') != 'inkpad':
@@ -1199,6 +1256,7 @@ class Document:
             doc.pages = [Page()]
         doc.gone_pages = set(meta.get('gone', []))
         doc.path = path
+        doc.sign = sign
         cover = meta.get('cover')
         if cover:
             # Older files stored a bare colour.

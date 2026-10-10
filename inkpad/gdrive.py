@@ -12,10 +12,18 @@ with what both sides looked like last time, moves only the notebooks that
 differ, then writes the index back. Deleted notebooks stay in the index as
 tombstones, which is how a deletion reaches other devices instead of being
 undone by them; renames and moves are just a changed path on the same id.
-Nothing is destroyed: deletions go to the local trash or the Drive bin, and a
-notebook edited on both sides keeps the remote version as a separate copy.
+Nothing is destroyed: deletions go to the local trash, and a notebook edited on
+both sides is merged item by item.
+
+Two devices may well sync at the same moment, and one of them may be cut off half way
+and go on much later with what it read before. So the index is never taken at its word
+about a notebook's content: what counts is the checksum Drive itself reports for the
+file, asked for again just before the file is replaced. A device that finds another
+has been there first merges instead of overwriting, and the index is read again
+before it is written, so that what others put in it meanwhile is kept.
 """
 import base64
+import copy
 import hashlib
 import http.server
 import json
@@ -32,7 +40,7 @@ from gi.repository import GLib
 
 from .i18n import tr
 from . import settings
-from .model import Document, merge, notebook_id, set_notebook_id
+from .model import Document, file_lock, merge, notebook_id, set_notebook_id
 
 SCOPE = 'https://www.googleapis.com/auth/drive.file'
 CONFIG = settings.CONFIG_DIR   # follows INKPAD_HOME, so an isolated run has no credentials
@@ -304,6 +312,10 @@ class Drive:
     def children(self, folder):
         return self._children(folder)
 
+    def md5(self, file_id):
+        """The checksum of a file's content as it is on Drive at this moment."""
+        return self._json('GET', '%s/files/%s?fields=md5Checksum' % (API, file_id)).get('md5Checksum')
+
     def root(self):
         query = {'q': "name = '%s' and mimeType = '%s' and 'root' in parents and trashed = false"
                       % (ROOT_NAME, FOLDER_MIME), 'fields': 'files(id)'}
@@ -490,6 +502,7 @@ def sync(root, drive, skip=(), progress=None):
         index_id = next((i for i, f in live.items() if f.get('name') == INDEX_NAME), None)
     cloud = drive.get_json(index_id) if index_id else {}
     items = cloud.setdefault('items', {})  # id -> {'path', 'trashed', 'md5', 'file', 'deleted', 'ts'}
+    read = copy.deepcopy(cloud)            # the index as it was read, to tell later what others changed
     for nid in [n for n, e in items.items() if e.get('file') not in live]:
         if items[nid].get('deleted'):
             items[nid]['file'] = None   # still a deletion to pass on, with nothing left to restore
@@ -497,15 +510,40 @@ def sync(root, drive, skip=(), progress=None):
             # Listed, but its file is gone from Drive. Forgotten here, it is sent again by
             # whichever device still has it.
             del items[nid]
+    for entry in items.values():
+        # The file itself says what is in it. The index may be behind: a device that was cut
+        # off after an upload never got to write it down.
+        actual = (live.get(entry.get('file')) or {}).get('md5Checksum')
+        if actual and not entry.get('deleted'):
+            entry['md5'] = actual
+    mine_was = copy.deepcopy(cloud)        # and as this sync started out with it
     saved_at = [time.monotonic()]
+    sent = set()                           # ids of the notebooks this sync uploaded
+
+    def publish():
+        """Write the index. It is read again first: whatever another device changed in it while
+        this sync was running is kept, wherever this sync did not change the same thing."""
+        nonlocal index_id, read, mine_was
+        if index_id is None:
+            index_id = drive.find(INDEX_NAME, root_id)
+        latest = drive.get_json(index_id) if index_id else {}
+        for part in ('items', 'folders'):
+            ours, theirs = cloud.setdefault(part, {}), latest.get(part) or {}
+            for key, value in theirs.items():
+                if value != read.get(part, {}).get(key) and ours.get(key) == mine_was.get(part, {}).get(key):
+                    ours[key] = value
+        if (latest.get('meta') or {}).get('ts', 0) > (cloud.get('meta') or {}).get('ts', 0):
+            cloud['meta'] = latest['meta']
+        index_id = state['index'] = drive.put_json(INDEX_NAME, cloud, root_id, index_id)
+        read = copy.deepcopy(cloud)
+        mine_was = copy.deepcopy(cloud)
 
     def checkpoint():
         """Write down, in the cloud and here, what has been done so far, so that a sync that is
         cut off goes on from there the next time."""
-        nonlocal index_id
         if time.monotonic() - saved_at[0] < CHECKPOINT:
             return
-        index_id = state['index'] = drive.put_json(INDEX_NAME, cloud, root_id, index_id)
+        publish()
         _save(state_path, state)
         saved_at[0] = time.monotonic()
 
@@ -553,7 +591,62 @@ def sync(root, drive, skip=(), progress=None):
         path, rel, in_trash = local[nid]
         file_id, theirs = drive.upload(path, os.path.basename(rel), root_id, entry.get('file'))
         summary['up'] += 1
+        sent.add(nid)
         entry.update(file=file_id, md5=theirs or mine, path=rel, trashed=in_trash, deleted=False, ts=time.time())
+
+    def settle(nid, entry, before):
+        """Make a notebook and the cloud's version of it the same, losing nothing of either."""
+        path = local[nid][0]
+        base = before['md5'] if before is not None else None   # what both sides last agreed on
+        mine_sent = bool(before and before.get('sent'))        # ...which this device had written
+        for _ in range(5):
+            mine = _md5(path)
+            if mine == entry.get('md5'):
+                return
+            if base is not None and entry.get('md5') == base:
+                # Only this device has changed it, as far as was known when the sync began.
+                # Another may have sent its own version since; uploading now would wipe that out.
+                now = drive.md5(entry['file']) if entry.get('file') else None
+                if now is None or now == base:
+                    push(nid, entry, mine)
+                    return
+                entry['md5'] = now
+                continue
+            theirs = path + '.theirs'
+            drive.download(entry['file'], theirs)
+            entry['md5'] = _md5(theirs)
+            with file_lock:
+                untouched = base is not None and _md5(path) == base
+                if untouched and not mine_sent:
+                    os.replace(theirs, path)   # nothing here that the cloud's version lacks
+                    summary['down'] += 1
+                    return
+                try:
+                    here_doc, their_doc = Document.load(path), Document.load(theirs)
+                    if untouched:
+                        # The cloud's version ought to be a later one of what this device sent.
+                        # If another device wrote over that without having seen it, it is not;
+                        # then what was written here is put back into it.
+                        if not any(merge(their_doc, here_doc)):
+                            os.replace(theirs, path)
+                            summary['down'] += 1
+                            return
+                        their_doc.save(path)
+                    else:
+                        # Edited on both sides: merge the two, item by item.
+                        merge(here_doc, their_doc)
+                        here_doc.save(path)
+                    os.remove(theirs)
+                    summary['merged'] += 1
+                except Exception:
+                    # Only if merging is not possible is the remote version kept as a notebook
+                    # of its own.
+                    conflict = _unique(os.path.splitext(path)[0] + tr('（云端副本）') + EXT)
+                    os.replace(theirs, conflict)
+                    set_notebook_id(conflict, uuid.uuid4().hex)
+                    summary['conflicts'] += 1
+            base, mine_sent = entry['md5'], False   # what is here now has all of that version in it
+        raise DriveError(tr('“%s”在同步时一直被其它设备更改，请稍后再同步') % os.path.basename(path))
 
     ids = sorted(set(local) | set(items) | set(known))
     steps = len(ids) + 2
@@ -608,28 +701,7 @@ def sync(root, drive, skip=(), progress=None):
                     continue
                 push(nid, entry, mine)  # edited after the deletion: the edit wins
             elif mine != entry.get('md5'):
-                if unchanged:
-                    drive.download(entry['file'], here[0])
-                    summary['down'] += 1
-                elif before is not None and entry.get('md5') == before['md5']:
-                    push(nid, entry, mine)
-                else:
-                    # Edited on both sides: merge the two, item by item. Only if that is not
-                    # possible is the remote version kept as a notebook of its own.
-                    theirs = here[0] + '.theirs'
-                    drive.download(entry['file'], theirs)
-                    try:
-                        merged = Document.load(here[0])
-                        merge(merged, Document.load(theirs))
-                        merged.save(here[0])
-                        os.remove(theirs)
-                        summary['merged'] += 1
-                    except Exception:
-                        copy = _unique(os.path.splitext(here[0])[0] + tr('（云端副本）') + EXT)
-                        os.replace(theirs, copy)
-                        set_notebook_id(copy, uuid.uuid4().hex)
-                        summary['conflicts'] += 1
-                    push(nid, entry, _md5(here[0]))
+                settle(nid, entry, before)
             # Name, folder and trash state travel separately from the content.
             where, there = (here[1], here[2]), (entry.get('path'), bool(entry.get('trashed')))
             if where != there:
@@ -643,7 +715,10 @@ def sync(root, drive, skip=(), progress=None):
         path, rel, in_trash = local[nid]
         entry = items[nid]
         entry.update(path=rel, trashed=in_trash)
+        was = known.get(nid)
         known[nid] = {'path': rel, 'trashed': in_trash, 'md5': entry['md5']}
+        if nid in sent or (was and was.get('sent') and was['md5'] == entry['md5']):
+            known[nid]['sent'] = True   # the cloud's version is the one this device wrote
         if summary['up'] + summary['down'] != moved:
             moved = summary['up'] + summary['down']
             checkpoint()
@@ -682,7 +757,7 @@ def sync(root, drive, skip=(), progress=None):
     elif meta.get('ts', 0) > (theirs or {}).get('ts', 0):
         cloud['meta'] = dict(shared, ts=meta['ts'])
 
-    state['index'] = drive.put_json(INDEX_NAME, cloud, root_id, index_id)
+    publish()
     state['last'] = time.time()
     _save(state_path, state)
     report(1.0, '')
