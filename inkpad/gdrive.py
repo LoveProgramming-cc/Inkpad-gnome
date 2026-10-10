@@ -421,7 +421,7 @@ def _stat(path):
     return '%d/%d' % (st.st_mtime_ns, st.st_size)
 
 
-BLOB_MIN = 256 * 1024   # a PDF or picture at least this big is kept on Drive as a file of its own
+BLOB_MIN = 32 * 1024    # a PDF or picture at least this big is kept on Drive as a file of its own
 BLOBS = 'blobs.json'    # in an uploaded notebook: {name in the zip: name of the file on Drive}
 FORMAT = 2              # of the index; 2 is the one in which notebooks are uploaded without their blobs
 

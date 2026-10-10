@@ -11,8 +11,10 @@ import math
 import os
 import struct
 import threading
+import time
 import uuid
 import zipfile
+import zlib
 
 import cairo
 
@@ -463,6 +465,8 @@ class Page:
         self.bookmark = False
         self.outline = None   # outline title, if the page is in the outline
         self.items = []
+        self.mt = 0.0         # when the settings above were last changed, for merging two versions
+        self._sign = None     # ...and what they were when that was last looked at
 
     def template(self):
         return {'w': self.w, 'h': self.h, 'paper': self.paper, 'color': self.color}
@@ -795,37 +799,61 @@ def _digest(text):
     return hashlib.md5(text.encode('utf-8')).hexdigest()[:16]
 
 
+# A page's settings: what is kept in document.json about it, apart from what is drawn on it.
+_SETTINGS = ('w', 'h', 'paper', 'color', 'board', 'pdf', 'pdf_page', 'rot', 'bookmark', 'outline')
+
+
+def _page_sign(page):
+    return (page.w, page.h, page.paper, tuple(page.color), bool(page.board),
+            _pdf_key(page.pdf) if page.pdf is not None else None, page.pdf_page, page.rot,
+            bool(page.bookmark), page.outline or None)
+
+
 def merge(mine, theirs):
     """Fold another version of the same notebook into mine, item by item.
 
     A page or an item that either side removed stays removed; everything else that either
-    side has is kept. Where both have a page, its settings are mine. Returns what changed
-    in mine: (pages added, pages removed, items added, items removed).
+    side has is kept. A page's settings (paper, background, bookmark...) are those of the
+    side that changed them last, and so is the order of the pages. Returns what changed in
+    mine: (pages added, pages removed, items added, items removed, settings taken over).
     """
+    mine.stamp()
+    theirs.stamp()
     gone_pages = mine.gone_pages | theirs.gone_pages
-    counts = [0, 0, 0, 0]
+    counts = [0, 0, 0, 0, 0]
     by_id = {page.id: page for page in mine.pages}
-    # Their new pages go after the page they follow on their side.
-    previous = None
-    for page in theirs.pages:
-        if page.id in by_id:
-            previous = page.id
-            continue
-        if page.id not in gone_pages:
-            at = next((i + 1 for i, p in enumerate(mine.pages) if p.id == previous), len(mine.pages))
-            mine.pages.insert(at, page)
-            by_id[page.id] = page
-            counts[0] += 1
-        previous = page.id
-    before = len(mine.pages)
-    mine.pages = [page for page in mine.pages if page.id not in gone_pages] or mine.pages[:1]
-    counts[1] = before - len(mine.pages)
     other = {page.id: page for page in theirs.pages}
+    # The pages are in the order of the side that arranged them last. A page only the other
+    # side has goes after the page it follows there.
+    lead, follow = (theirs, mine) if theirs.order_mt > mine.order_mt else (mine, theirs)
+    order = [page.id for page in lead.pages]
+    have = set(order)
+    previous = None
+    for page in follow.pages:
+        if page.id not in have:
+            order.insert(order.index(previous) + 1 if previous in have else len(order), page.id)
+            have.add(page.id)
+        previous = page.id
+    pages = [by_id.get(i) or other[i] for i in order if i not in gone_pages]
+    was = [page.id for page in mine.pages]
+    counts[0] = sum(1 for page in pages if page.id not in by_id)
+    mine.pages = pages or mine.pages[:1]
+    now = {page.id for page in mine.pages}
+    counts[1] = sum(1 for i in was if i not in now)
+    if [i for i in was if i in now] != [page.id for page in mine.pages if page.id in by_id]:
+        counts[4] += 1
+    mine.order_mt = max(mine.order_mt, theirs.order_mt)
+    mine._order = [page.id for page in mine.pages]
     changed = False
     for page in mine.pages:
         their = other.get(page.id)
         if their is None or their is page:
             continue
+        if their.mt > page.mt:
+            for key in _SETTINGS:
+                setattr(page, key, getattr(their, key))
+            page.mt, page._sign = their.mt, _page_sign(page)
+            counts[4] += 1
         gone = page.gone | their.gone
         have = {item_id(it) for it in page.items}
         new = [it for it in their.items if item_id(it) not in have and item_id(it) not in gone]
@@ -915,6 +943,16 @@ def unpack_points(text):
     return pts
 
 
+def _pdf_key(pdf):
+    """What two copies of the same PDF have in common. A notebook holds a PDF once however many
+    times it was imported into it, or came into it with pages merged from another device."""
+    try:
+        return pdf._key
+    except AttributeError:
+        pdf._key = (len(pdf.data), zlib.crc32(pdf.data))
+        return pdf._key
+
+
 class _SaveCtx:
     def __init__(self):
         self.images = []
@@ -954,6 +992,8 @@ class Document:
         self.gone_pages = set()     # ids of pages removed from the document
         self.cover_spec = None      # (style, colour) of a designed cover; None shows the first page
         self.sign = None            # file_sign() of the file as this document last read or wrote it
+        self.order_mt = 0.0         # when the pages were last put in another order
+        self._order = None          # ...and the order they were in when that was last looked at
 
     @property
     def modified(self):
@@ -1121,10 +1161,27 @@ class Document:
     # Pages are separate so that only a changed page is serialised again, and items have ids
     # and leave tombstones so that two versions of a notebook can be merged item by item.
 
+    def stamp(self):
+        """Note the time on the settings of every page that has changed them, and on the order
+        of the pages if that has changed, since this was last done. When two versions of a
+        notebook are merged, the later change is the one that stays."""
+        now = time.time()
+        for page in self.pages:
+            sign = _page_sign(page)
+            if sign != page._sign:
+                page.mt, page._sign = now, sign
+        ids = [page.id for page in self.pages]
+        if self._order is not None and self._order != ids:
+            here, before = set(ids), set(self._order)
+            if [i for i in self._order if i in here] != [i for i in ids if i in before]:
+                self.order_mt = now
+        self._order = ids
+
     def snapshot(self):
         """Everything needed to write the file, as immutable data safe to hand to a thread."""
+        self.stamp()
         ctx = _SaveCtx()
-        pdfs = []
+        pdfs, slots = [], {}
         pages = []
         blobs = {}
         for page in self.pages:
@@ -1132,15 +1189,19 @@ class Document:
             if page.board:
                 d['board'] = True
             if page.pdf is not None:
-                if page.pdf not in pdfs:
+                key = _pdf_key(page.pdf)
+                if key not in slots:
+                    slots[key] = len(pdfs)
                     pdfs.append(page.pdf)
-                d['pdf'] = pdfs.index(page.pdf)
+                d['pdf'] = slots[key]
                 d['pdf_page'] = page.pdf_page
                 d['rot'] = page.rot
             if page.bookmark:
                 d['bookmark'] = True
             if page.outline:
                 d['outline'] = page.outline
+            if page.mt:
+                d['mt'] = page.mt
             pages.append(d)
             has_image = any(it.kind == 'i' for it in page.items)
             if page._blob is None or page._blob[0] != page.rev or has_image:
@@ -1155,6 +1216,8 @@ class Document:
             blobs[page.id] = page._blob[1]
         meta = {'format': 'inkpad', 'version': 3, 'pages': pages, 'id': self.id,
                 'gone': sorted(self.gone_pages)[-GONE_LIMIT:]}
+        if self.order_mt:
+            meta['order_mt'] = self.order_mt
         if self.cover_spec is not None:
             meta['cover'] = [self.cover_spec[0], list(self.cover_spec[1])]
         return {'json': json.dumps(meta, separators=(',', ':')), 'pages': blobs, 'pdfs': [p.data for p in pdfs],
@@ -1222,12 +1285,22 @@ class Document:
             if meta.get('format') != 'inkpad':
                 raise ValueError(tr('不是 Inkpad 文档'))
             names = set(z.namelist())
-            pdfs = []
+            # The same PDF or picture stored twice is read once, and so saved once from then on.
+            pdfs, same = [], {}
             while 'pdf/%d.pdf' % len(pdfs) in names:
-                pdfs.append(PdfDoc(z.read('pdf/%d.pdf' % len(pdfs))))
+                info = z.getinfo('pdf/%d.pdf' % len(pdfs))
+                key = (info.file_size, info.CRC)
+                if key not in same:
+                    same[key] = PdfDoc(z.read(info))
+                    same[key]._key = key
+                pdfs.append(same[key])
             ctx = _SaveCtx()
             while 'img/%d.png' % len(ctx.images) in names:
-                ctx.images.append(z.read('img/%d.png' % len(ctx.images)))
+                info = z.getinfo('img/%d.png' % len(ctx.images))
+                key = ('img', info.file_size, info.CRC)
+                if key not in same:
+                    same[key] = z.read(info)
+                ctx.images.append(same[key])
             contents = {d['id']: json.loads(z.read('pages/%s.json' % d['id']))
                         for d in meta['pages'] if 'id' in d and 'pages/%s.json' % d['id'] in names}
         doc = cls()
@@ -1251,10 +1324,12 @@ class Document:
                 item.id = data.get('id') or _digest('%s/%d/%s' % (page.id, k, json.dumps(data, sort_keys=True)))
                 page.items.append(item)
             page.gone = set(content.get('gone', []))
+            page.mt, page._sign = d.get('mt', 0.0), _page_sign(page)
             doc.pages.append(page)
         if not doc.pages:
             doc.pages = [Page()]
         doc.gone_pages = set(meta.get('gone', []))
+        doc.order_mt, doc._order = meta.get('order_mt', 0.0), [page.id for page in doc.pages]
         doc.path = path
         doc.sign = sign
         cover = meta.get('cover')
