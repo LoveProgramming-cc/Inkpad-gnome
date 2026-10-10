@@ -944,8 +944,9 @@ def unpack_points(text):
 
 
 def _pdf_key(pdf):
-    """What two copies of the same PDF have in common. A notebook holds a PDF once however many
-    times it was imported into it, or came into it with pages merged from another device."""
+    """Something two copies of the same PDF have in common, for finding them quickly; whether
+    they are the same is settled by comparing their bytes. A notebook holds a PDF once however
+    many times it was imported into it, or came into it with pages merged from another device."""
     try:
         return pdf._key
     except AttributeError:
@@ -1189,11 +1190,15 @@ class Document:
             if page.board:
                 d['board'] = True
             if page.pdf is not None:
-                key = _pdf_key(page.pdf)
-                if key not in slots:
-                    slots[key] = len(pdfs)
+                # The same PDF is written once. The key only picks out which ones to look at:
+                # two are the same when their bytes are.
+                found = next((n for n in slots.setdefault(_pdf_key(page.pdf), [])
+                              if pdfs[n] is page.pdf or pdfs[n].data == page.pdf.data), None)
+                if found is None:
+                    found = len(pdfs)
+                    slots[_pdf_key(page.pdf)].append(found)
                     pdfs.append(page.pdf)
-                d['pdf'] = slots[key]
+                d['pdf'] = found
                 d['pdf_page'] = page.pdf_page
                 d['rot'] = page.rot
             if page.bookmark:
@@ -1288,19 +1293,27 @@ class Document:
             # The same PDF or picture stored twice is read once, and so saved once from then on.
             pdfs, same = [], {}
             while 'pdf/%d.pdf' % len(pdfs) in names:
+                # A size and checksum seen before is a sign that it may be a second copy; it is
+                # one when its bytes are the same.
                 info = z.getinfo('pdf/%d.pdf' % len(pdfs))
                 key = (info.file_size, info.CRC)
-                if key not in same:
-                    same[key] = PdfDoc(z.read(info))
-                    same[key]._key = key
-                pdfs.append(same[key])
+                data = z.read(info) if key in same else None
+                twin = next((p for p in same.get(key, []) if p.data == data), None)
+                if twin is None:
+                    twin = PdfDoc(z.read(info) if data is None else data)
+                    twin._key = key
+                    same.setdefault(key, []).append(twin)
+                pdfs.append(twin)
             ctx = _SaveCtx()
             while 'img/%d.png' % len(ctx.images) in names:
                 info = z.getinfo('img/%d.png' % len(ctx.images))
                 key = ('img', info.file_size, info.CRC)
-                if key not in same:
-                    same[key] = z.read(info)
-                ctx.images.append(same[key])
+                data = z.read(info)
+                twin = next((d for d in same.get(key, []) if d == data), None)
+                if twin is None:
+                    twin = data
+                    same.setdefault(key, []).append(twin)
+                ctx.images.append(twin)
             contents = {d['id']: json.loads(z.read('pages/%s.json' % d['id']))
                         for d in meta['pages'] if 'id' in d and 'pages/%s.json' % d['id'] in names}
         doc = cls()

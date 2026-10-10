@@ -423,15 +423,30 @@ def _stat(path):
 
 BLOB_MIN = 32 * 1024    # a PDF or picture at least this big is kept on Drive as a file of its own
 BLOBS = 'blobs.json'    # in an uploaded notebook: {name in the zip: name of the file on Drive}
-FORMAT = 2              # of the index; 2 is the one in which notebooks are uploaded without their blobs
+FORMAT = 3              # of the index. 2: notebooks are uploaded without their blobs; 3: blobs named by SHA-256
 
 
 def _is_blob(info):
     return info.filename.startswith(('pdf/', 'img/')) and info.file_size >= BLOB_MIN
 
 
-def _blob_name(info):
+# A blob is known by the SHA-256 of its content: two that carry the same name are the same
+# bytes, as far as anyone can tell, and one that is downloaded is checked against its name.
+# (Before, in index format 2, the name was the zip's CRC-32 and the size, which is not enough
+# to say that two files are the same. Notebooks uploaded then still list those names, and
+# are read; whatever is uploaded now uses the new ones.)
+_SHA = 'blob-sha256-'
+
+
+def _old_name(info):
     return 'blob-%08x-%d' % (info.CRC, info.file_size)
+
+
+def _sha_name(stream):
+    digest = hashlib.sha256()
+    for block in iter(lambda: stream.read(1 << 20), b''):
+        digest.update(block)
+    return _SHA + digest.hexdigest()
 
 
 def _slim(path, dest, have):
@@ -454,7 +469,8 @@ def _slim(path, dest, have):
                 if not _is_blob(info):
                     slim.writestr(info, z.read(info))
                     continue
-                name = listed[info.filename] = _blob_name(info)
+                with z.open(info) as src:
+                    name = listed[info.filename] = _sha_name(src)
                 if name not in out and not have(name):
                     out[name] = '%s.%s' % (dest, name)
                     with z.open(info) as src, open(out[name], 'wb') as dst:
@@ -475,7 +491,21 @@ def _fatten(part, have, fetch):
         full = part + '.full'
         old = zipfile.ZipFile(have) if have and os.path.exists(have) else None
         try:
-            here = {_blob_name(info): info for info in old.infolist() if _is_blob(info)} if old else {}
+            mine = [info for info in old.infolist() if _is_blob(info)] if old else []
+            by_old = {_old_name(info): info for info in mine}
+            by_sha = None   # worked out when first asked for: it means reading every one of them
+
+            def local(blob):
+                nonlocal by_sha
+                if not blob.startswith(_SHA):
+                    return by_old.get(blob)
+                if by_sha is None:
+                    by_sha = {}
+                    for info in mine:
+                        with old.open(info) as src:
+                            by_sha[_sha_name(src)] = info
+                return by_sha.get(blob)
+
             with zipfile.ZipFile(full, 'w', zipfile.ZIP_DEFLATED) as out:
                 for info in z.infolist():
                     if info.filename != BLOBS:
@@ -483,18 +513,35 @@ def _fatten(part, have, fetch):
                 for name, blob in listed.items():
                     # Stored, as the app itself writes them: they are compressed already.
                     with out.open(zipfile.ZipInfo(name), 'w', force_zip64=True) as dst:
-                        if blob in here:
-                            with old.open(here[blob]) as src:
+                        info = local(blob)
+                        if info is not None:
+                            with old.open(info) as src:
                                 shutil.copyfileobj(src, dst, 1 << 20)
                         else:
                             fetch(blob, full + '.blob')
                             with open(full + '.blob', 'rb') as src:
+                                if blob.startswith(_SHA) and _sha_name(src) != blob:
+                                    raise DriveError(tr('从云端下载的 PDF 或图片（%s）内容不对，没有使用它。请再同步一次。') % blob[:24])
+                                src.seek(0)
                                 shutil.copyfileobj(src, dst, 1 << 20)
                             os.remove(full + '.blob')
         finally:
             if old:
                 old.close()
     os.replace(full, part)
+
+
+def _stripped(path):
+    """Whether a notebook in the library is one as it is uploaded, without its large PDFs and
+    pictures. That is never meant to be: it is what a download that was cut off before those
+    had come left behind, or what a version of the app from before they were kept apart put
+    in place of the whole notebook. It cannot be opened, and must not be taken for a
+    notebook that is up to date, or be sent anywhere."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            return BLOBS in z.namelist()
+    except (OSError, zipfile.BadZipFile):
+        return False
 
 
 def _fetcher(drive, root_id, names):
@@ -593,7 +640,7 @@ def sync(root, drive, skip=(), progress=None, only=None):
     known = state.setdefault('items', {})  # id -> {'path', 'trashed', 'md5'} when both sides last agreed
     trash_dir = os.path.join(root, '.trash')
     os.makedirs(trash_dir, exist_ok=True)
-    summary = {'up': 0, 'down': 0, 'conflicts': 0, 'merged': 0, 'removed': 0, 'moved': 0, 'meta': False}
+    summary = {'up': 0, 'down': 0, 'conflicts': 0, 'merged': 0, 'removed': 0, 'moved': 0, 'meta': False, 'mended': 0}
 
     live = {f['id']: f for f in drive.children(root_id)}
     index_id = state.get('index')
@@ -713,7 +760,10 @@ def sync(root, drive, skip=(), progress=None, only=None):
         mine, stat, blobs = _slim(path, slim, lambda name: name in names)
         for name, part in blobs.items():
             # Each of these is uploaded once, whatever is written in the notebook afterwards.
-            names[name] = drive.upload(part, name, root_id, None)[0]
+            file_id, arrived = drive.upload(part, name, root_id, None)
+            if arrived and arrived != _md5(part):
+                raise DriveError(tr('上传的 PDF 或图片在云端的校验值不对，请再同步一次'))   # and it is not listed
+            names[name] = file_id
             os.remove(part)
         file_id, theirs = drive.upload(slim, os.path.basename(rel), root_id, entry.get('file'))
         theirs = theirs or _md5(slim)
@@ -748,7 +798,7 @@ def sync(root, drive, skip=(), progress=None, only=None):
                     return
                 entry['md5'] = now
                 continue
-            theirs = path + '.theirs'
+            theirs = os.path.join(work_dir, 'theirs')   # aside, so that nothing half done is left by the notebook
             drive.download(entry['file'], theirs)
             entry['md5'] = _md5(theirs)
             _fatten(theirs, path, fetch)
@@ -791,6 +841,7 @@ def sync(root, drive, skip=(), progress=None, only=None):
     ids = sorted(set(local) | set(items) | set(known)) if only is None else sorted(local)
     steps = len(ids) + 2
     moved = 0
+    unmended = []   # notebooks here that lack their PDFs and could not be given them back
     for n, nid in enumerate(ids):
         here, entry, before = local.get(nid), items.get(nid), known.get(nid)
         name = os.path.basename((here[1] if here else (entry or {}).get('path')) or '')
@@ -799,6 +850,20 @@ def sync(root, drive, skip=(), progress=None, only=None):
         drive.on_bytes = lambda got, total, n=n, name=name: report((n + 1 + got / total) / steps, name)
         if nid in skip_ids:
             continue
+        if here is not None and _stripped(here[0]):
+            # A notebook here without its PDFs and pictures (see _stripped). They are fetched
+            # and it is made whole before anything else is done with it; while that is not
+            # possible it is left exactly as it is, and above all not uploaded.
+            try:
+                mending = os.path.join(work_dir, 'mending')
+                shutil.copyfile(here[0], mending)
+                _fatten(mending, None, fetch)
+                with file_lock:
+                    os.replace(mending, here[0])
+                summary['mended'] += 1
+            except DriveError as exc:
+                unmended.append((name, exc))
+                continue
         if here is None and entry is None:
             known.pop(nid, None)
             continue
@@ -825,8 +890,12 @@ def sync(root, drive, skip=(), progress=None, only=None):
                 else abspath(entry['path'])
             os.makedirs(os.path.dirname(target), exist_ok=True)
             target = _unique(target)
-            drive.download(entry['file'], target)
-            _fatten(target, None, fetch)
+            # Put together aside, and moved into the library only when it is whole: a download
+            # that is cut off leaves nothing there.
+            coming = os.path.join(work_dir, 'coming')
+            drive.download(entry['file'], coming)
+            _fatten(coming, None, fetch)
+            os.replace(coming, target)
             agreed[nid] = (_md5(target), _stat(target))
             local[nid] = [target, os.path.relpath(target, trash_dir if entry.get('trashed') else root)
                           .replace(os.sep, '/'), bool(entry.get('trashed'))]
@@ -913,6 +982,8 @@ def sync(root, drive, skip=(), progress=None, only=None):
     state['last'] = time.time()
     _save(state_path, state)
     report(1.0, '')
+    if unmended:
+        raise DriveError(tr('“%s”缺少它的 PDF 或图片，暂时无法补全：%s') % unmended[0])
     return summary
 
 
@@ -949,10 +1020,12 @@ def cloud_restore(root, drive, ids, progress=None):
         drive.on_bytes = lambda got, total, n=n, rel=rel: report((n + got / total) / len(ids), os.path.basename(rel))
         target = _unique(os.path.join(root, *rel.split('/')))
         os.makedirs(os.path.dirname(target), exist_ok=True)
-        drive.download(entry['file'], target)
         if fetch is None:
             fetch = _fetcher(drive, root_id, {f.get('name'): f['id'] for f in drive.children(root_id)})
-        _fatten(target, None, fetch)
+        coming = target + '.part'   # whole before it is given its name in the library
+        drive.download(entry['file'], coming)
+        _fatten(coming, None, fetch)
+        os.replace(coming, target)
         rel = os.path.relpath(target, root).replace(os.sep, '/')
         # It is a live notebook again, on both sides, with what the cloud holds.
         entry.update(deleted=False, trashed=False, path=rel, ts=time.time())
