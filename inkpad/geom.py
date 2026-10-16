@@ -100,6 +100,7 @@ MIN_LENGTH_RATIO = 2.5  # path length relative to its extent along the main axis
 SPREAD_FREE = 0.3       # a scribble this thin (width across / length along) needs no extra passes
 SPREAD_STEP = 0.25      # one more pass for each step wider than that
 DENSE_RATIO = 7.0       # path length relative to extent of a rub over one small spot
+STRAIGHT_PASSES = 4     # straight lines back and forth, each along the one before
 
 
 def is_scribble(pts):
@@ -110,10 +111,15 @@ def is_scribble(pts):
     What a scratch-out does is go back over the same ground: each pass runs at least half the
     stroke's length, it turns about half a turn at each end and seldom in between, and the more
     room it spreads over the more passes it takes before it reads as a scribble. A rub that keeps
-    circling one small spot counts as well."""
-    n = len(pts)
-    if n < 10:
+    circling one small spot counts as well, and so do straight lines drawn back and forth, each
+    close along the one before, however far they reach."""
+    if len(pts) < 10:
         return False
+    return _scratched(pts) or _straight_passes(pts)
+
+
+def _scratched(pts):
+    n = len(pts)
     mx = sum(p[0] for p in pts) / n
     my = sum(p[1] for p in pts) / n
     sxx = syy = sxy = 0.0
@@ -171,6 +177,63 @@ def is_scribble(pts):
         return False   # it went round in loops besides: handwriting
     need = MIN_REVERSALS + max(0, math.ceil((width / extent - SPREAD_FREE) / SPREAD_STEP - 1e-9))
     return reversals >= need
+
+
+def _straight_passes(pts):
+    """Straight lines back and forth: each pass turns right round from the one before, runs close
+    along it, and is about as long. Handwriting has strokes like that (an M, a W) but not four in
+    a row lying on top of each other."""
+    legs, size = _legs(pts)
+    run = 1
+    for a, b in zip(legs, legs[1:]):
+        la = math.hypot(a[2] - a[0], a[3] - a[1])
+        lb = math.hypot(b[2] - b[0], b[3] - b[1])
+        longer, shorter = max(la, lb), min(la, lb)
+        back = ((a[2] - a[0]) * (b[2] - b[0]) + (a[3] - a[1]) * (b[3] - b[1])) / (la * lb) <= -0.966   # 165° or more
+        # how far the middle of this pass is from the line of the one before
+        mx, my = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+        off = abs((a[2] - a[0]) * (a[1] - my) - (a[0] - mx) * (a[3] - a[1])) / la
+        if back and off <= 0.08 * longer and shorter >= 0.4 * longer and shorter >= 0.2 * size:
+            run += 1
+            if run >= STRAIGHT_PASSES:
+                return True
+        else:
+            run = 1
+    return False
+
+
+def _legs(pts):
+    """A stroke as the straight runs it is made of, (x0, y0, x1, y1) each, leaving out the short
+    bits where it turns; and the size of the stroke."""
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    size = math.hypot(max(xs) - min(xs), max(ys) - min(ys))
+    if size < 5.0:
+        return [], size
+    step = size / 100
+    r = [pts[0]]
+    run = 0.0
+    for a, b in zip(pts, pts[1:]):
+        run += math.hypot(b[0] - a[0], b[1] - a[1])
+        if run >= step:
+            r.append(b)
+            run = 0.0
+    if r[-1] is not pts[-1]:
+        r.append(pts[-1])
+    # A run ends where the way on, a few steps ahead, leaves its direction by more than 45°.
+    legs = []
+    start = 0
+    for i in range(1, len(r) - 1):
+        j = min(i + 3, len(r) - 1)
+        lx, ly = r[i][0] - r[start][0], r[i][1] - r[start][1]
+        nx, ny = r[j][0] - r[i][0], r[j][1] - r[i][1]
+        a, b = math.hypot(lx, ly), math.hypot(nx, ny)
+        if a > 1e-9 and b > 1e-9 and (lx * nx + ly * ny) / (a * b) < 0.7071:
+            legs.append((r[start][0], r[start][1], r[i][0], r[i][1]))
+            start = i
+    legs.append((r[start][0], r[start][1], r[-1][0], r[-1][1]))
+    longest = max(math.hypot(l[2] - l[0], l[3] - l[1]) for l in legs)
+    return [l for l in legs if math.hypot(l[2] - l[0], l[3] - l[1]) >= 0.15 * longest and longest > 0], size
 
 
 def _turning(pts, step):
