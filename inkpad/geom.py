@@ -95,12 +95,22 @@ def segs_cross(a, b, c, d):
 
 # -- scribble to erase ------------------------------------------------------
 
-MIN_REVERSALS = 3      # a scribble is at least four back-and-forth passes
+MIN_REVERSALS = 3       # a scribble is at least four back-and-forth passes
 MIN_LENGTH_RATIO = 2.5  # path length relative to its extent along the main axis
+SPREAD_FREE = 0.3       # a scribble this thin (width across / length along) needs no extra passes
+SPREAD_STEP = 0.25      # one more pass for each step wider than that
+DENSE_RATIO = 7.0       # path length relative to extent of a rub over one small spot
 
 
 def is_scribble(pts):
-    """True when a stroke looks like a quick back-and-forth scratch-out."""
+    """True when a stroke looks like a quick back-and-forth scratch-out.
+
+    Writing turns a lot too, so turning alone does not decide: a word written in one stroke goes
+    round its letters, and a large one turns through 4π or 8π without being a scribble.
+    What a scratch-out does is go back over the same ground: each pass runs at least half the
+    stroke's length, it turns about half a turn at each end and seldom in between, and the more
+    room it spreads over the more passes it takes before it reads as a scribble. A rub that keeps
+    circling one small spot counts as well."""
     n = len(pts)
     if n < 10:
         return False
@@ -115,9 +125,11 @@ def is_scribble(pts):
     ang = 0.5 * math.atan2(2 * sxy, sxx - syy)
     ux, uy = math.cos(ang), math.sin(ang)
     t = [(p[0] - mx) * ux + (p[1] - my) * uy for p in pts]
+    across = [(p[1] - my) * ux - (p[0] - mx) * uy for p in pts]
     extent = max(t) - min(t)
     if extent < 5.0:
         return False
+    width = max(across) - min(across)
     length = 0.0
     a = pts[0]
     for b in pts[1:]:
@@ -125,8 +137,9 @@ def is_scribble(pts):
         a = b
     if length < MIN_LENGTH_RATIO * extent:
         return False
-    # Direction reversals along the main axis, with hysteresis so jitter is ignored.
-    h = max(extent * 0.15, 1.5)
+    # Direction reversals along the main axis, each at least half the stroke's length away
+    # from the one before, so that what letters do inside a word is not counted.
+    h = extent * 0.5
     direction = 0
     ext = t[0]
     reversals = 0
@@ -149,7 +162,36 @@ def is_scribble(pts):
                 reversals += 1
                 direction = 1
                 ext = v
-    return reversals >= MIN_REVERSALS
+    if reversals < MIN_REVERSALS:
+        return False
+    turned = _turning(pts, max(math.hypot(extent, width) / 40, 0.5))
+    if length >= DENSE_RATIO * extent and turned >= 4 * math.pi:
+        return True
+    if turned - math.pi * reversals > 2 * math.pi:
+        return False   # it went round in loops besides: handwriting
+    need = MIN_REVERSALS + max(0, math.ceil((width / extent - SPREAD_FREE) / SPREAD_STEP - 1e-9))
+    return reversals >= need
+
+
+def _turning(pts, step):
+    """How far the direction of a stroke turns in all, left and right alike, measured on points
+    about `step` apart so that the tremor of the hand does not add up."""
+    kept = [pts[0]]
+    run = 0.0
+    for a, b in zip(pts, pts[1:]):
+        run += math.hypot(b[0] - a[0], b[1] - a[1])
+        if run >= step:
+            kept.append(b)
+            run = 0.0
+    total = 0.0
+    prev = None
+    for a, b in zip(kept, kept[1:]):
+        heading = math.atan2(b[1] - a[1], b[0] - a[0])
+        if prev is not None:
+            d = (heading - prev + math.pi) % (2 * math.pi) - math.pi
+            total += abs(d)
+        prev = heading
+    return total
 
 
 def scribble_targets(pts, items):
