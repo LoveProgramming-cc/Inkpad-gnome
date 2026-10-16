@@ -152,6 +152,7 @@ class Canvas(Gtk.Widget, Gtk.Scrollable):
         self.shape_kind = 'line'
         self.text_size = 18.0
         self.scribble_erase = True
+        self.scribble_loose = False   # the earlier, readier rule for what a scribble is
         self.finger_draw = False
         self.on_scribble = None
         self.pen_sens = 1.0            # pressure sensitivity factor
@@ -2289,7 +2290,7 @@ class Canvas(Gtk.Widget, Gtk.Scrollable):
                 item.pts.append((px, py, item.pts[-1][2]))
             item.update_bbox()
             if item.tool not in ('hl', 'tape') and not fixed and not op.get('rule') and self.scribble_erase \
-                    and geom.is_scribble(item.pts):
+                    and geom.is_scribble(item.pts, self.scribble_loose):
                 targets = geom.scribble_targets(item.pts, page.items)
                 if targets:
                     # Scribble to erase, recorded as two steps: the scribble as ordinary ink, then

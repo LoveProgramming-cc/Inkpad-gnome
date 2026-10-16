@@ -545,6 +545,7 @@ class Window(Adw.ApplicationWindow):
         c.lasso_rect, c.lasso_filter = st['lasso_rect'], set(st['lasso_filter'])
         c.shape_kind, c.text_size = st['shape_kind'], TEXT_SIZES[st['text_size']]
         c.scribble_erase, c.finger_draw = st['scribble_erase'], st['finger_draw']
+        c.scribble_loose = st.get('scribble_loose', False)
         c.palm_ms = st.get('palm_ms', 80)
         c.input_log = os.path.join(settings.CONFIG_DIR, 'input.log') if st.get('input_log') else None
         c.note_color = NOTE_COLORS[st.get('note_color', 0) % len(NOTE_COLORS)]

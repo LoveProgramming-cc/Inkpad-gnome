@@ -103,7 +103,7 @@ DENSE_RATIO = 7.0       # path length relative to extent of a rub over one small
 STRAIGHT_PASSES = 4     # straight lines back and forth, each along the one before
 
 
-def is_scribble(pts):
+def is_scribble(pts, loose=False):
     """True when a stroke looks like a quick back-and-forth scratch-out.
 
     Writing turns a lot too, so turning alone does not decide: a word written in one stroke goes
@@ -112,10 +112,63 @@ def is_scribble(pts):
     stroke's length, it turns about half a turn at each end and seldom in between, and the more
     room it spreads over the more passes it takes before it reads as a scribble. A rub that keeps
     circling one small spot counts as well, and so do straight lines drawn back and forth, each
-    close along the one before, however far they reach."""
+    close along the one before, however far they reach. `loose` asks for the earlier rule."""
     if len(pts) < 10:
         return False
+    if loose:
+        return _loose(pts)
     return _scratched(pts) or _straight_passes(pts)
+
+
+def _loose(pts):
+    """The earlier rule, kept for those who want it: four passes back and forth along the main
+    axis, each at least 15% of the stroke's length. It catches more, joined-up writing included."""
+    n = len(pts)
+    mx = sum(p[0] for p in pts) / n
+    my = sum(p[1] for p in pts) / n
+    sxx = syy = sxy = 0.0
+    for p in pts:
+        dx, dy = p[0] - mx, p[1] - my
+        sxx += dx * dx
+        syy += dy * dy
+        sxy += dx * dy
+    ang = 0.5 * math.atan2(2 * sxy, sxx - syy)
+    ux, uy = math.cos(ang), math.sin(ang)
+    t = [(p[0] - mx) * ux + (p[1] - my) * uy for p in pts]
+    extent = max(t) - min(t)
+    if extent < 5.0:
+        return False
+    length = 0.0
+    a = pts[0]
+    for b in pts[1:]:
+        length += math.hypot(b[0] - a[0], b[1] - a[1])
+        a = b
+    if length < MIN_LENGTH_RATIO * extent:
+        return False
+    h = max(extent * 0.15, 1.5)
+    direction = 0
+    ext = t[0]
+    reversals = 0
+    for v in t[1:]:
+        if direction == 0:
+            if abs(v - ext) >= h:
+                direction = 1 if v > ext else -1
+                ext = v
+        elif direction == 1:
+            if v > ext:
+                ext = v
+            elif ext - v >= h:
+                reversals += 1
+                direction = -1
+                ext = v
+        else:
+            if v < ext:
+                ext = v
+            elif v - ext >= h:
+                reversals += 1
+                direction = 1
+                ext = v
+    return reversals >= MIN_REVERSALS
 
 
 def _scratched(pts):

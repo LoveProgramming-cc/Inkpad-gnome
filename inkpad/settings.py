@@ -54,6 +54,7 @@ DEFAULTS = {
     'text_size': 1,
     'hold_shape': True,
     'scribble_erase': True,
+    'scribble_loose': False,
     'finger_draw': False,
     'template': {'w': 595.0, 'h': 842.0, 'paper': 'blank', 'color': [1.0, 1.0, 1.0]},
     'sort': 'date',

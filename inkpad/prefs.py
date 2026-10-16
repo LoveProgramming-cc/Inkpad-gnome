@@ -247,12 +247,13 @@ class PrefsDialog(Adw.PreferencesDialog):
 
         writing = Adw.PreferencesGroup(title=tr('书写'))
         for key, title, subtitle in (('scribble_erase', tr('涂画以擦除'), tr('在字迹上来回涂抹即可删除')),
+                                     ('scribble_loose', tr('宽松的涂抹删除'), tr('使用旧的判定方式：更容易删掉，但连笔写字时可能被当成涂抹')),
                                      ('hold_shape', tr('长按绘制规则形状'), tr('画完停住片刻，笔迹变成直线、矩形或椭圆')),
                                      ('finger_draw', tr('用手指书写'), tr('关闭时手指只用于滚动和缩放')),
                                      ('crosshair', tr('显示十字光标'), tr('关闭后书写时只显示十字中心的小圆点')),
                                      ('mouse_hand', tr('有手写笔时鼠标不书写'),
                                       tr('用过手写笔之后，鼠标拖动改为移动页面，点击胶带可掀开或盖回'))):
-            writing.add(_switch(title, subtitle, st.get(key, True), lambda on, key=key: win._set(st, key, on)))
+            writing.add(_switch(title, subtitle, st.get(key, key != 'scribble_loose'), lambda on, key=key: win._set(st, key, on)))
         writing.add(_combo(tr('翻页方向'), tr('左右翻页时，在第一页或最后一页继续拉动可新建一页'),
                            [('vertical', '上下'), ('horizontal', '左右')], st.get('paging', 'vertical'),
                            lambda value: win._set(st, 'paging', value)))
