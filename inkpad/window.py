@@ -411,10 +411,13 @@ class Window(Adw.ApplicationWindow):
         bh = bar.measure(Gtk.Orientation.VERTICAL, -1)[1] - bar.get_margin_top()
         cw, ch = self.canvas.get_width(), self.canvas.get_height()
         left = max(8, min(cw - bw - 8, x + w / 2 - bw / 2))
+        # The undo and tool option pills float along the top: the bar stays clear of them,
+        # going below the selection when there is no room above it.
+        clear = 64 if ch > 240 else 8
         top = y - bh - 14
-        if top < 64:               # no room above (the tool options sit there): go below
+        if top < clear:
             top = y + h + 18
-        left, top = int(left), int(max(8, min(ch - bh - 8, top)))
+        left, top = int(left), int(max(clear, min(ch - bh - 8, top)))
         if (bar.get_margin_start(), bar.get_margin_top()) != (left, top):
             bar.set_margin_start(left)
             bar.set_margin_top(top)
