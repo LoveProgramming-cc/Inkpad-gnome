@@ -1345,14 +1345,32 @@ class Document:
         doc.order_mt, doc._order = meta.get('order_mt', 0.0), [page.id for page in doc.pages]
         doc.path = path
         doc.sign = sign
-        cover = meta.get('cover')
-        if cover:
-            # Older files stored a bare colour.
-            doc.cover_spec = (cover[0], tuple(cover[1])) if isinstance(cover[0], str) else ('simple', tuple(cover))
+        doc.cover_spec = _cover_spec(meta)
         return doc
 
     def display_name(self):
         return os.path.splitext(os.path.basename(self.path))[0] if self.path else tr('未命名笔记')
+
+
+def _cover_spec(meta):
+    cover = meta.get('cover')
+    if not cover:
+        return None
+    # Older files stored a bare colour.
+    return (cover[0], tuple(cover[1])) if isinstance(cover[0], str) else ('simple', tuple(cover))
+
+
+def cover_spec_of(path):
+    """The designed cover of a notebook file, read without loading it; None for the first page.
+
+    A library draws such a cover with the file's present name: the picture stored in the file
+    was drawn with the name it had then, and a rename (in the library, or from another device)
+    does not redraw it."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            return _cover_spec(json.loads(z.read('document.json')))
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile):
+        return None
 
 
 def notebook_id(path):

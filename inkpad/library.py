@@ -21,7 +21,7 @@ from . import APP_NAME, home_override, icons
 from . import settings as app_settings
 from .dialogs import PaperDialog, ask_text, confirm
 from .icons import Icon, TextureView
-from .model import Document, set_notebook_id
+from .model import Document, cover_spec_of, render_cover, set_notebook_id
 from . import ptext
 from .render import rgba, texture_from_surface
 
@@ -826,7 +826,9 @@ class LibraryView(Gtk.Box):
         else:
             cover = TextureView(self.COVER_W, self.COVER_H, halign=Gtk.Align.CENTER, valign=Gtk.Align.END)
             cover.add_css_class('cover')
-            png = self.store.cover(entry.path)
+            # A designed cover carries the name, which is the file's name now (see cover_spec_of).
+            spec = cover_spec_of(entry.path)
+            png = render_cover(spec, os.path.splitext(os.path.basename(entry.path))[0]) if spec else self.store.cover(entry.path)
             if png:
                 try:
                     texture = Gdk.Texture.new_from_bytes(GLib.Bytes.new(png))
