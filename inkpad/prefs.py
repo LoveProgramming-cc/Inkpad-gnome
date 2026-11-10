@@ -248,6 +248,7 @@ class PrefsDialog(Adw.PreferencesDialog):
         writing = Adw.PreferencesGroup(title=tr('书写'))
         for key, title, subtitle in (('scribble_erase', tr('涂画以擦除'), tr('在字迹上来回涂抹即可删除')),
                                      ('scribble_loose', tr('宽松的涂抹删除'), tr('使用旧的判定方式：更容易删掉，但连笔写字时可能被当成涂抹')),
+                                     ('scribble_toast', tr('涂画擦除后显示撤销提示'), tr('擦掉后在底部提示擦除了几项，可点“撤销”')),
                                      ('hold_shape', tr('长按绘制规则形状'), tr('画完停住片刻，笔迹变成直线、矩形或椭圆')),
                                      ('finger_draw', tr('用手指书写'), tr('关闭时手指只用于滚动和缩放')),
                                      ('crosshair', tr('显示十字光标'), tr('关闭后书写时只显示十字中心的小圆点')),

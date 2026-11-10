@@ -851,7 +851,8 @@ class LibraryView(Gtk.Box):
             frame.add_overlay(star)
 
         name_box = Gtk.Box(spacing=2, halign=Gtk.Align.CENTER)
-        name_box.append(Gtk.Label(label=entry.name, ellipsize=3, max_width_chars=14))
+        # The name on up to three lines, in the middle: read, not cut at one line.
+        name_box.append(Gtk.Label(label=entry.name, ellipsize=3, max_width_chars=14, wrap=True, wrap_mode=2, lines=3, justify=Gtk.Justification.CENTER))
         name_box.append(Icon(icons.chevron, 14))
         name = Gtk.MenuButton(child=name_box, halign=Gtk.Align.CENTER)
         name.add_css_class('flat')
@@ -860,9 +861,11 @@ class LibraryView(Gtk.Box):
         date.add_css_class('caption')
         date.add_css_class('dim-label')
 
-        holder = Gtk.Box(height_request=self.COVER_H, halign=Gtk.Align.CENTER)
+        # A notebook's cover may be any shape up to COVER_H; a folder is only as tall as its art,
+        # and the item sits in the middle of its row, so a folder does not stand in empty space.
+        holder = Gtk.Box(height_request=-1 if entry.is_dir else self.COVER_H, halign=Gtk.Align.CENTER)
         holder.append(frame)
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, width_request=186)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, width_request=186, valign=Gtk.Align.CENTER)
         box.append(holder)
         box.append(name)
         box.append(date)

@@ -90,6 +90,8 @@ class Window(Adw.ApplicationWindow):
         self.canvas = Canvas()
         self.canvas.connect('view-changed', lambda *_: self._update_status())
         self.canvas.on_erase_done = self._erase_done
+        # After scribbling something out, how much went, with Undo (Preferences: "Show Undo after scribbling out").
+        self.canvas.on_scribble = lambda n: self.st.get('scribble_toast', True) and self.toast(tr('已擦除 %d 项') % n, tr('撤销'), self._undo)
         self.canvas.on_pull_add = self._pull_add
 
         self._sync_busy = False

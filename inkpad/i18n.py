@@ -513,5 +513,8 @@ EN = {
     '打开的笔记本多久同步一次': 'How often the open notebook is synced',
     '每隔这么久查看一次其它设备写了什么；自己写的内容在停笔几秒后就会同步，与这里无关': 'How often to look for what other devices wrote. What you write here is synced a few seconds after you pause, whatever this says',
     '宽松的涂抹删除': 'Lenient scribble to erase',
+    '已擦除 %d 项': 'Erased %d items',
+    '涂画擦除后显示撤销提示': 'Show Undo after scribbling out',
+    '擦掉后在底部提示擦除了几项，可点“撤销”': 'Says at the bottom how many items were erased, with Undo',
     '使用旧的判定方式：更容易删掉，但连笔写字时可能被当成涂抹': 'Uses the earlier rule: scribbles erase more easily, but joined-up handwriting may be taken for one',
 }

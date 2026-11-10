@@ -55,6 +55,7 @@ DEFAULTS = {
     'hold_shape': True,
     'scribble_erase': True,
     'scribble_loose': False,
+    'scribble_toast': True,   # after scribbling something out, say how much, with Undo
     'finger_draw': False,
     'template': {'w': 595.0, 'h': 842.0, 'paper': 'blank', 'color': [1.0, 1.0, 1.0]},
     'sort': 'date',
