@@ -13,9 +13,11 @@ There are two things people call frosted glass:
 | **In-app glass** (this document) | the app's own content under a bar | the app, with GTK | GNOME, KDE, any desktop |
 | **Window glass** | the desktop and other windows behind the app | the compositor | only compositors with a blur protocol (KWin); not GNOME Shell |
 
-GTK's CSS has no `backdrop-filter`, so a translucent background alone only gives a see-through
-bar, not a frosted one. The blur has to be drawn by hand. GTK's scene graph (GSK) has a blur
-node, and that is all that is needed.
+GTK 4.22 and later support the CSS property `backdrop-filter`, which does this in one line
+(`backdrop-filter: blur(11px)`). Older GTK 4 has none: there a translucent background alone
+only gives a see-through bar, and the blur has to be drawn by hand with GSK's blur node. That
+is what Inkpad does, and what this document describes. A standalone version, with a comparison
+of the two ways, is in [gtk-frosted-glass](https://github.com/LoveProgramming-cc/gtk-frosted-glass).
 
 ## The idea
 

@@ -53,4 +53,9 @@ you distribute that is built on this code must keep the copyright and licence no
 credit this project, and be released with its source under the same licence. It comes with
 no warranty.
 
+**Exception: the frosted glass.** `inkpad/glass.py` is also offered by its authors under the
+MIT licence, as published in [gtk-frosted-glass](https://github.com/LoveProgramming-cc/gtk-frosted-glass).
+You may take that one file under either licence; everything else in Inkpad is under the GPL
+only.
+
 Third-party material is listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

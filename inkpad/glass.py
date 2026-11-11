@@ -1,10 +1,13 @@
 """Frosted glass: bars that float over a view show it blurred through them.
 
-GTK's CSS has no backdrop-filter, so the overlay that holds the bars draws it:
-the view underneath is recorded once as a render node, and drawn a second time,
+GTK 4.22 and later can do this alone, with the CSS property backdrop-filter; older
+GTK 4 has none, so here the overlay that holds the bars draws it: the view underneath is recorded once as a render node, and drawn a second time,
 blurred and clipped to the bar's shape, behind each bar marked as glass. The
 bar's own translucent background (style.css) is the wash over it. This is the
 look of the other editions of Inkpad (Haze on Android, materials on iOS).
+
+This file is also offered under the MIT licence, as published in
+https://github.com/LoveProgramming-cc/gtk-frosted-glass (see README.md, Licence).
 """
 from gi.repository import GLib, Graphene, Gsk, Gtk
 
