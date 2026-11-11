@@ -20,6 +20,13 @@ class App(Adw.Application):
         # The window is matched to its launcher (and so to its icon) by this name.
         GLib.set_prgname(APP_ID)
         Gtk.Window.set_default_icon_name(APP_ID)
+        # Some desktops (KDE) put the window's icon among the title buttons; the bars here
+        # have no place for it, and the other editions have none.
+        gtk = Gtk.Settings.get_default()
+        layout = gtk.get_property('gtk-decoration-layout') or ''
+        sides = [','.join(b for b in side.split(',') if b != 'icon') for side in layout.split(':')]
+        if ':'.join(sides) != layout:
+            gtk.set_property('gtk-decoration-layout', ':'.join(sides))
         provider = Gtk.CssProvider()
         provider.load_from_path(os.path.join(os.path.dirname(__file__), 'style.css'))
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), provider,

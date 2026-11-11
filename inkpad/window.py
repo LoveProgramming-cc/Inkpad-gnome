@@ -11,6 +11,7 @@ from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Graphene, Gtk, Pango
 from .i18n import tr
 from . import APP_NAME, VERSION, gdrive, i18n, icons, settings
 from .canvas import Canvas
+from .glass import GlassOverlay
 from .dialogs import PaperDialog, ask_cover, ask_page, ask_text
 from .icons import Icon, TextureView
 from .minimap import Minimap
@@ -269,7 +270,7 @@ class Window(Adw.ApplicationWindow):
         # The canvas handles fingers itself (palm rejection, pinch); see Canvas._raw_event.
         scroller = self.scroller = Gtk.ScrolledWindow(child=self.canvas, hexpand=True, vexpand=True, kinetic_scrolling=False,
                                                       hscrollbar_policy=Gtk.PolicyType.EXTERNAL, vscrollbar_policy=Gtk.PolicyType.EXTERNAL)   # the canvas draws its own bars
-        overlay = Gtk.Overlay(child=scroller)
+        overlay = GlassOverlay(child=scroller)   # the bars over the page are frosted glass
 
         history = Gtk.Box(halign=Gtk.Align.START, valign=Gtk.Align.START, margin_start=10, margin_top=10)
         history.add_css_class('pill')

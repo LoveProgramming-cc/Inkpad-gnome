@@ -67,7 +67,8 @@
 }
 
 .pill {
-  background: @popover_bg_color;
+  /* Frosted glass: the page shows through blurred (glass.py); this is the wash over it. */
+  background: alpha(@popover_bg_color, 0.72);
   color: @popover_fg_color;
   border-radius: 18px;
   padding: 5px 7px;
@@ -156,7 +157,7 @@ popover button.swatch.current {
 }
 
 .minimap {
-  background: @popover_bg_color;
+  background: alpha(@popover_bg_color, 0.72);
   color: @popover_fg_color;
   border-radius: 16px;
   box-shadow: 0 6px 20px alpha(black, 0.12), 0 1px 3px alpha(black, 0.12), 0 0 0 1px alpha(black, 0.05);
@@ -173,7 +174,7 @@ popover button.swatch.current {
 }
 
 .status {
-  background: @popover_bg_color;
+  background: alpha(@popover_bg_color, 0.72);
   color: alpha(@popover_fg_color, 0.8);
   border-radius: 999px;
   padding: 5px 14px;
@@ -313,6 +314,14 @@ button.add-page:hover {
   background: none;
   box-shadow: none;
   min-height: 52px;
+}
+/* The bars over the grid: frosted glass, the notebooks blurred through (glass.py). */
+/* What is blurred has to be opaque: a blurred picture with holes lets the sharp one show. */
+.library .glass-under {
+  background: @view_bg_color;
+}
+.library .glass-bar {
+  background: alpha(@view_bg_color, 0.74);
 }
 .library-side {
   background: linear-gradient(170deg, mix(@sidebar_bg_color, @accent_bg_color, 0.05), @sidebar_bg_color 60%);

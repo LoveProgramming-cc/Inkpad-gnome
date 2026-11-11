@@ -20,6 +20,7 @@ from .i18n import tr
 from . import APP_NAME, home_override, icons
 from . import settings as app_settings
 from .dialogs import PaperDialog, ask_text, confirm
+from .glass import GlassOverlay
 from .icons import Icon, TextureView
 from .model import Document, cover_spec_of, render_cover, set_notebook_id
 from . import ptext
@@ -606,6 +607,9 @@ class LibraryView(Gtk.Box):
         self.append(side)
 
         main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True)
+        # The bars at the top are frosted glass: the notebooks scroll on under them (glass.py).
+        head = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, valign=Gtk.Align.START)
+        head.add_css_class('glass-bar')
         top = Adw.HeaderBar(show_title=False)
         top.add_css_class('flat')
         self.cloud = Gtk.MenuButton(child=Icon(icons.cloud), tooltip_text=tr('Google Drive 同步'))
@@ -620,14 +624,14 @@ class LibraryView(Gtk.Box):
         self.search.add_css_class('round')
         self.search.connect('search-changed', lambda *_: self.refresh())
         top.pack_end(self.search)
-        main.append(top)
+        head.append(top)
         # Sync progress is kept here and shown in the cloud menu while that is open.
         self.sync_fraction, self.sync_text, self.sync_bar = 0.0, '', None
 
         # The way down to the open folder; each part is a button that goes there.
         self.crumbs = Gtk.Box(spacing=2, margin_start=30, margin_end=30, visible=False)
         self.crumbs.add_css_class('crumbs')
-        main.append(self.crumbs)
+        head.append(self.crumbs)
         bar = Gtk.Box(spacing=10, margin_start=34, margin_end=30, margin_top=2, margin_bottom=14)
         self.back = Gtk.Button(child=Icon(icons.back), tooltip_text=tr('返回上一级'), valign=Gtk.Align.CENTER)
         self.back.add_css_class('circular')
@@ -668,7 +672,7 @@ class LibraryView(Gtk.Box):
         self.select_btn.add_css_class('circular')
         self.select_btn.connect('clicked', lambda *_: self.set_selecting(True))
         bar.append(self.select_btn)
-        main.append(bar)
+        head.append(bar)
 
         # Shown instead of the bar above while items are being selected.
         self.selecting = False
@@ -689,7 +693,7 @@ class LibraryView(Gtk.Box):
         done.add_css_class('pill-btn')
         done.connect('clicked', lambda *_: self.set_selecting(False))
         sel.append(done)
-        main.append(sel)
+        head.append(sel)
 
         self.flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, activate_on_single_click=True,
                                 valign=Gtk.Align.START, halign=Gtk.Align.START, homogeneous=True,
@@ -704,7 +708,12 @@ class LibraryView(Gtk.Box):
         grid.add_overlay(self.band)
         self.stack.add_named(grid, 'grid')
         self.stack.add_named(self.empty, 'empty')
-        main.append(self.stack)
+        self.stack.add_css_class('glass-under')   # opaque, or the blur would be see-through
+        under = GlassOverlay(child=self.stack, vexpand=True)
+        under.backing = 'view_bg_color'
+        under.on_bar_height = self._head_height   # the grid starts below the bars
+        under.add_overlay(head)
+        main.append(under)
         # Dragging with the mouse draws a rubber band that selects what it touches.
         drag = Gtk.GestureDrag(button=Gdk.BUTTON_PRIMARY, propagation_phase=Gtk.PropagationPhase.CAPTURE)
         drag.connect('drag-update', self._band_update)
@@ -1197,6 +1206,11 @@ class LibraryView(Gtk.Box):
             self.set_selecting(False)
 
         dialog.save(self.get_root(), None, done)
+
+    def _head_height(self, height):
+        self.flow.set_margin_top(height + 10)
+        self.empty.set_margin_top(height)
+        return False
 
     def _band_begin(self, gesture, x, y):
         # A drag that starts on an item carries the item; the rubber band is for the space between.
