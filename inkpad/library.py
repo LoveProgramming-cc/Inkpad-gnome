@@ -126,7 +126,16 @@ class Store:
             pass
 
     def _save_meta(self):
-        self.meta['ts'] = time.time()
+        # The time stamp says when the favourites and folder styles, the part that is synced
+        # whole (newer wins), were last changed here: other changes leave it, or a device with
+        # stale favourites that trashed a notebook would write them over everyone's.
+        try:
+            with open(self._meta_path, encoding='utf-8') as f:
+                old = json.load(f)
+        except (OSError, ValueError):
+            old = {}
+        if any((old.get(k) or empty) != (self.meta.get(k) or empty) for k, empty in (('favorites', []), ('folders', {}))):
+            self.meta['ts'] = time.time()
         with open(self._meta_path + '.tmp', 'w', encoding='utf-8') as f:
             json.dump(self.meta, f, ensure_ascii=False)
         os.replace(self._meta_path + '.tmp', self._meta_path)
@@ -193,6 +202,8 @@ class Store:
 
     @staticmethod
     def unique(folder, name, ext=''):
+        # A name is made one the library can show: no slash (it would be a folder), no dot to begin with (a hidden file, which the library never shows).
+        name = name.strip().replace('/', '-').lstrip('.').strip() or tr('未命名')
         path = os.path.join(folder, name + ext)
         n = 2
         while os.path.exists(path):

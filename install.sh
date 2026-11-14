@@ -32,12 +32,34 @@ Exec="$exec_path" %F
 Icon=$id
 Terminal=false
 Categories=GNOME;GTK;Office;
-MimeType=application/pdf;
+MimeType=application/x-inkpad;application/x-goodnotes;application/pdf;
 StartupNotify=true
 StartupWMClass=$id
 DESKTOP
 chmod 644 "$apps/$id.desktop"
 
+# The notebook and Goodnotes file types, so that the file manager opens them with Inkpad.
+mkdir -p "$data/mime/packages"
+cat > "$data/mime/packages/$id.xml" <<'MIME'
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-inkpad">
+    <comment>Inkpad notebook</comment>
+    <comment xml:lang="zh_CN">Inkpad 笔记本</comment>
+    <comment xml:lang="ja">Inkpad ノートブック</comment>
+    <sub-class-of type="application/zip"/>
+    <glob pattern="*.inkpad"/>
+  </mime-type>
+  <mime-type type="application/x-goodnotes">
+    <comment>Goodnotes document</comment>
+    <comment xml:lang="zh_CN">Goodnotes 文档</comment>
+    <comment xml:lang="ja">Goodnotes 書類</comment>
+    <sub-class-of type="application/zip"/>
+    <glob pattern="*.goodnotes"/>
+  </mime-type>
+</mime-info>
+MIME
+update-mime-database "$data/mime" 2>/dev/null || true
 update-desktop-database "$apps" 2>/dev/null || true
 # A stale icon cache hides new icons, so refresh it, or drop it if that is not possible.
 if [ -f "$theme/icon-theme.cache" ]; then

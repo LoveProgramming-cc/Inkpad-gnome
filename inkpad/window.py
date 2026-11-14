@@ -1381,7 +1381,7 @@ class Window(Adw.ApplicationWindow):
     def _schedule_save(self):
         if self._save_timer:
             GLib.source_remove(self._save_timer)
-        self._save_timer = GLib.timeout_add(2500, self._autosave)
+        self._save_timer = GLib.timeout_add(1500, self._autosave)   # as on the other platforms
 
     def _autosave(self):
         """Save in the background once the pen has rested for a moment."""
@@ -1674,12 +1674,12 @@ class Window(Adw.ApplicationWindow):
                        or result.get('merged'))
             if changed and not self.in_editor():
                 self.library.refresh()
-            if result.get('merged') and not quiet:
-                self.toast(tr('同步完成：%d 本笔记两边都改过，已自动合并') % result['merged'])
+            # One message, so that none is pushed off the screen by the next.
             if result['conflicts']:
                 self.toast(tr('同步完成：%d 本笔记两边都改过，云端版本已另存为副本') % result['conflicts'])
             elif not quiet:
-                self.toast(tr('同步完成：上传 %d，下载 %d') % (result['up'], result['down']))
+                self.toast(tr('同步完成：上传 %d，下载 %d，合并 %d') % (result['up'], result['down'], result.get('merged', 0))
+                           if result['up'] or result['down'] or result.get('merged') else tr('已是最新'))
             return False
 
         threading.Thread(target=work, daemon=True).start()

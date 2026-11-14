@@ -15,7 +15,8 @@ screen. Python, GTK 4 and libadwaita.
 ## Running
 
 Needs Python 3, PyGObject, GTK 4, libadwaita and pycairo, as shipped with a current GNOME
-desktop.
+desktop, and poppler-glib for PDFs (Debian/Ubuntu: `libpoppler-glib8`; Fedora: `poppler-glib`;
+usually already installed with GNOME).
 
 ```sh
 bin/inkpad          # run from the source tree

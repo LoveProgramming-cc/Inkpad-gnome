@@ -96,6 +96,12 @@ def install_client(source):
     # A file exported from Inkpad names the folder to sync with; one from Google does not,
     # and leaves that as it is here.
     data.setdefault('inkpad_folder', folder_id())
+    # A sign-in belongs to the client it was made with: another client drops it.
+    if (load_client() or {}).get('client_id') != client['client_id']:
+        try:
+            os.remove(TOKEN_PATH)
+        except OSError:
+            pass
     _write_private(CLIENT_PATH, data)
 
 
@@ -167,7 +173,10 @@ def _post(url, fields):
             return json.load(response)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode('utf-8', 'replace')[:300]
-        raise DriveError(tr('Google 拒绝了请求（%d）：%s') % (exc.code, detail)) from None
+        error = DriveError(tr('Google 拒绝了请求（%d）：%s') % (exc.code, detail))
+        error.code = exc.code
+        error.detail = detail
+        raise error from None
     except urllib.error.URLError as exc:
         raise DriveError(tr('无法连接 Google：%s') % exc.reason) from None
 
@@ -258,9 +267,21 @@ class Drive:
 
     def _access(self):
         if time.time() >= self.token.get('expires_at', 0):
-            fresh = _post(self.client['token_uri'], {
-                'client_id': self.client['client_id'], 'client_secret': self.client.get('client_secret', ''),
-                'refresh_token': self.token['refresh_token'], 'grant_type': 'refresh_token'})
+            try:
+                fresh = _post(self.client['token_uri'], {
+                    'client_id': self.client['client_id'], 'client_secret': self.client.get('client_secret', ''),
+                    'refresh_token': self.token['refresh_token'], 'grant_type': 'refresh_token'})
+            except DriveError as exc:
+                if 'invalid_grant' not in (getattr(exc, 'detail', '') or ''):
+                    raise
+                # The sign-in is no longer good (the grant was taken back, the password changed,
+                # or an app still "in testing" let it lapse after a week): it is forgotten, so
+                # that the settings offer to connect again, and the user is told just that.
+                try:
+                    os.remove(TOKEN_PATH)
+                except OSError:
+                    pass
+                raise DriveError(tr('Google Drive 的登录已失效，请在设置中重新连接')) from None
             self.token['access_token'] = fresh['access_token']
             self.token['expires_at'] = time.time() + fresh.get('expires_in', 3600) - 60
             _write_private(TOKEN_PATH, self.token)
@@ -771,7 +792,16 @@ def _sync(root, drive, skip, progress, only, thorough):
     same_as = {(bool(e.get('trashed')), e.get('path')): (nid, e.get('stat')) for nid, e in known.items()}
     unwritten = set()
     files, _ = _scan(root)
-    trashed = {name: os.path.join(trash_dir, name) for name in sorted(os.listdir(trash_dir)) if name.endswith(EXT)}
+    # The trash, folders put there included: what is in a trashed folder is in the trash too,
+    # not gone. (Taken for gone, it would be passed on to other devices as deleted.)
+    trashed = {}
+    for base, dirs, names_here in os.walk(trash_dir):
+        dirs[:] = sorted(d for d in dirs if not d.startswith('.'))
+        prefix = os.path.relpath(base, trash_dir).replace(os.sep, '/')
+        prefix = '' if prefix == '.' else prefix + '/'
+        for name in sorted(names_here):
+            if name.endswith(EXT) and not name.startswith('.'):
+                trashed[prefix + name] = os.path.join(base, name)
     for rel, path, in_trash in [(r, p, False) for r, p in sorted(files.items())] + \
                               [(n, p, True) for n, p in trashed.items()]:
         if only is not None and os.path.abspath(path) not in only:
@@ -802,12 +832,22 @@ def _sync(root, drive, skip, progress, only, thorough):
     def place(nid, rel, in_trash):
         """Move a local notebook to where the index says it belongs."""
         path = local[nid][0]
-        target = os.path.join(trash_dir, os.path.basename(rel)) if in_trash else abspath(rel)
+        # In the trash a notebook keeps the folder it was trashed with, as on the device that
+        # trashed the folder, so that putting the folder back brings it along everywhere.
+        target = os.path.join(trash_dir, *rel.split('/')) if in_trash else abspath(rel)
         if os.path.abspath(target) != os.path.abspath(path):
             os.makedirs(os.path.dirname(target), exist_ok=True)
             target = _unique(target)
             shutil.move(path, target)
-        rel = os.path.basename(target) if in_trash else os.path.relpath(target, root).replace(os.sep, '/')
+            # A folder in the trash that this leaves empty goes with it.
+            folder = os.path.dirname(path)
+            while os.path.abspath(folder).startswith(os.path.abspath(trash_dir) + os.sep):
+                try:
+                    os.rmdir(folder)
+                except OSError:
+                    break
+                folder = os.path.dirname(folder)
+        rel = os.path.relpath(target, trash_dir if in_trash else root).replace(os.sep, '/')
         local[nid] = [target, rel, in_trash]
 
     def local_md5(nid, path):
@@ -964,7 +1004,7 @@ def _sync(root, drive, skip, progress, only, thorough):
                 continue
             if entry.get('trashed') and before is None:
                 continue  # sitting in another device's trash; no need to fetch it
-            target = os.path.join(trash_dir, os.path.basename(entry['path'])) if entry.get('trashed') \
+            target = os.path.join(trash_dir, *entry['path'].split('/')) if entry.get('trashed') \
                 else abspath(entry['path'])
             os.makedirs(os.path.dirname(target), exist_ok=True)
             target = _unique(target)
@@ -981,14 +1021,21 @@ def _sync(root, drive, skip, progress, only, thorough):
         else:
             mine = local_md5(nid, here[0])[0]
             unchanged = before is not None and mine == (before.get('local') or before['md5'])
+            # Put back from the trash here since this device last followed a deletion into it.
+            restored = before is not None and before.get('trashed') and not here[2]
             if entry.get('deleted'):
-                if here[2] or unchanged:
-                    # Deleted elsewhere and not edited here since: follow, into the trash.
+                if here[2] or (unchanged and not restored):
+                    # Deleted elsewhere and not edited here since: follow, into the trash. What
+                    # was done is remembered, so that the notebook being brought back, here or
+                    # elsewhere, is told from this device putting it in the trash of its own accord.
+                    in_trash = here[2]
                     place(nid, here[1], True)
-                    known.pop(nid, None)
-                    summary['removed'] += not here[2]
+                    path = local[nid][0]
+                    known[nid] = {'path': local[nid][1], 'trashed': True, 'md5': entry.get('md5'),
+                                  'local': mine, 'stat': _stat(path)}
+                    summary['removed'] += not in_trash
                     continue
-                push(nid, entry)  # edited after the deletion: the edit wins
+                push(nid, entry)  # edited, or brought back, after the deletion: that wins
             else:
                 settle(nid, entry, before)
             # Name, folder and trash state travel separately from the content.

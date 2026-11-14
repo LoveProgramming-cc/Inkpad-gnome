@@ -6,6 +6,7 @@ directly. Rendering goes onto a pycairo context: onto an image surface for the
 screen, or onto a PDF surface for export, which keeps the page vector.
 """
 import ctypes
+import ctypes.util
 import threading
 
 from .i18n import tr
@@ -31,7 +32,18 @@ class _GError(ctypes.Structure):
 def _load():
     glib = ctypes.CDLL('libglib-2.0.so.0')
     gobject = ctypes.CDLL('libgobject-2.0.so.0')
-    pop = ctypes.CDLL('libpoppler-glib.so.8')
+    # The library's version number differs between distributions: the usual one first, then
+    # whatever name the system's loader knows it by.
+    pop = None
+    for name in ('libpoppler-glib.so.8', ctypes.util.find_library('poppler-glib')):
+        if name:
+            try:
+                pop = ctypes.CDLL(name)
+                break
+            except OSError:
+                pass
+    if pop is None:
+        raise OSError('libpoppler-glib not found: install poppler-glib (Debian/Ubuntu: gir1.2-poppler-0.18 / libpoppler-glib8; Fedora: poppler-glib)')
     glib.g_bytes_new.restype = c_void_p
     glib.g_bytes_new.argtypes = [c_char_p, c_size_t]
     glib.g_bytes_unref.argtypes = [c_void_p]

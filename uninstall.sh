@@ -11,6 +11,8 @@ rm -f "$theme/scalable/apps/$id.svg"
 for size in 48 64 128 256 512; do
     rm -f "$theme/${size}x${size}/apps/$id.png"
 done
+rm -f "$data/mime/packages/$id.xml"
+update-mime-database "$data/mime" 2>/dev/null || true
 update-desktop-database "$apps" 2>/dev/null || true
 if [ -f "$theme/icon-theme.cache" ]; then
     gtk4-update-icon-cache -q -t -f "$theme" 2>/dev/null \
