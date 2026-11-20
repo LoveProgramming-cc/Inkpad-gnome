@@ -75,6 +75,7 @@ def _filters(*specs):
 
 
 class Window(Adw.ApplicationWindow):
+    _page_clip = None   # a copied page, shared by every window
     def __init__(self, app, store=None):
         super().__init__(application=app, default_width=1240, default_height=840, title=APP_NAME)
         self.st = settings.load()
@@ -85,7 +86,6 @@ class Window(Adw.ApplicationWindow):
         self.tool = self._prev_tool = 'pen'
         self._save_timer = 0
         self._save_thread = None
-        self._page_clip = None
         self._loading = False
 
         self.canvas = Canvas()
@@ -1065,7 +1065,7 @@ class Window(Adw.ApplicationWindow):
                  (tr('从大纲移除') if page.outline else tr('将页面添加到大纲…'), lambda: self.edit_outline(page)),
                  None,
                  (tr('拷贝页面'), lambda: self.copy_page(page))]
-        if self._page_clip is not None:
+        if Window._page_clip is not None:
             rows.append((tr('粘贴页面'), lambda: self.paste_page(page)))
         rows += [(tr('复制页面'), lambda: self.duplicate_page(page)),
                  (tr('在后面添加页面'), lambda: self.add_after(page)),
@@ -1130,7 +1130,7 @@ class Window(Adw.ApplicationWindow):
                  (icons.duplicate, tr('复制'), lambda: self.duplicate_page(page), act),
                  (icons.reset, tr('左转'), lambda: self.rotate_page(page, 3), act),
                  (icons.rotate_cw, tr('右转'), lambda: self.rotate_page(page, 1), act)]
-        if self._page_clip is not None:
+        if Window._page_clip is not None:
             tiles.append((icons.paste, tr('粘贴'), lambda: self.paste_page(page), act))
         grid = Gtk.Grid(column_homogeneous=True, column_spacing=4, row_spacing=4)
         for k, (draw, text, fn, how) in enumerate(tiles):
@@ -1203,7 +1203,7 @@ class Window(Adw.ApplicationWindow):
         ask_text(self, tr('添加到大纲'), tr('第 %d 页') % (self._index(page) + 1), done)
 
     def copy_page(self, page):
-        self._page_clip = page.clone()
+        Window._page_clip = page.clone()
         self.toast(tr('已拷贝页面'))
 
     def _insert_page(self, after, page):
@@ -1212,7 +1212,7 @@ class Window(Adw.ApplicationWindow):
         self.canvas.scroll_to_page(i)
 
     def paste_page(self, page):
-        self._insert_page(page, self._page_clip.clone())
+        self._insert_page(page, Window._page_clip.clone())
 
     def duplicate_page(self, page):
         self._insert_page(page, page.clone())

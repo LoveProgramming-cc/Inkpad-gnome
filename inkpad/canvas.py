@@ -77,6 +77,7 @@ class _Entry:
 
 class Canvas(Gtk.Widget, Gtk.Scrollable):
     __gtype_name__ = 'InkpadCanvas'
+    _clip = []   # copied items, shared by every window so they can be pasted into another notebook
     __gsignals__ = {
         'view-changed': (GObject.SignalFlags.RUN_FIRST, None, ()),
         'selection-made': (GObject.SignalFlags.RUN_FIRST, None, ()),
@@ -135,7 +136,6 @@ class Canvas(Gtk.Widget, Gtk.Scrollable):
         self._op = None
         self._sel = None
         self._hidden = None
-        self._clip = []
         self._ptr = (0.0, 0.0)
         self._pen_down = False
         self._mouse_down = False
@@ -1903,6 +1903,8 @@ class Canvas(Gtk.Widget, Gtk.Scrollable):
         """Selection box in page points, following an in-progress move or scale."""
         x0, y0, x1, y1 = self._sel['bbox']
         op = self._op
+        if op is not None and op['kind'] == 'move' and op.get('reflowed'):
+            return op['reflowed'].bbox   # the box follows the rewrapped lines
         if op is not None and op['kind'] == 'move':
             s, (ox, oy), dx, dy = op['s'], op['origin'], op['dx'], op['dy']
             return ox + (x0 - ox) * s + dx, oy + (y0 - oy) * s + dy, ox + (x1 - ox) * s + dx, oy + (y1 - oy) * s + dy
@@ -2121,6 +2123,12 @@ class Canvas(Gtk.Widget, Gtk.Scrollable):
                     return
                 op['live'] = True
             px, py = self._to_page(i, x, y)
+            if op.get('reflow'):
+                t = _reflow_text(self._sel['items'][0], op['reflow'], px - op['start'][0])
+                op['reflowed'] = t
+                op['layer'] = self._raster(i, t.bbox, t.draw)
+                self.queue_draw()
+                return
             if op['scaling']:
                 ox, oy = op['origin']
                 sx, sy = op['start']
@@ -2333,7 +2341,10 @@ class Canvas(Gtk.Widget, Gtk.Scrollable):
             self._hidden = None
             olds = self._sel['items']
             s, (ox, oy), dx, dy = op['s'], op['origin'], op['dx'], op['dy']
-            if abs(s - 1) > 1e-3 or math.hypot(dx, dy) * self.zoom > 1:
+            if op.get('reflowed'):
+                self.doc.replace_items(page, olds, [op['reflowed']])
+                self.select(page, [op['reflowed']])
+            elif abs(s - 1) > 1e-3 or math.hypot(dx, dy) * self.zoom > 1:
                 news = [it.transformed(s, ox, oy, dx, dy) for it in olds]
                 if op['copy']:
                     self.doc.add_items(page, news)   # the originals stay where they were
@@ -2481,13 +2492,21 @@ class Canvas(Gtk.Widget, Gtk.Scrollable):
                 scaling = True
                 origin = (x0 + x1 - max(x0, min(x1, px)), y0 + y1 - max(y0, min(y1, py)))
         items = sel['items']
+        # One text box taken by its left or right edge: the lines get wider or narrower instead.
+        reflow = 0
+        handle = math.hypot((px - x1) * k - 4, (py - y1) * k - 4) <= 13
+        if scaling and not handle and len(items) == 1 and isinstance(items[0], Text):
+            inner = min(r, (bx1 - bx0) / 4, (by1 - by0) / 4)
+            if by0 + inner < py < by1 - inner:
+                reflow = -1 if px <= (x0 + x1) / 2 else 1
+                scaling = False
         # Lift the items out of the page raster and carry them as one texture.
         layer = self._raster(i, sel['bbox'], lambda cr: [it.draw(cr) for it in items])
         self._hidden = {id(it) for it in items}
         self._repaint_page(sel['page'], sel['bbox'])
         self._op = {'kind': 'move', 'page': sel['page'], 'start': (px, py), 'origin': origin, 'copy': False,
                     'scaling': scaling, 's': 1.0, 'dx': 0.0, 'dy': 0.0, 'layer': layer,
-                    'at': (x, y), 'slack': 8 if reach > 7 else 0, 'live': False}
+                    'at': (x, y), 'slack': 8 if reach > 7 else 0, 'live': False, 'reflow': reflow}
         self.emit('selection-changed')
         self.queue_draw()
         return True
@@ -2580,7 +2599,7 @@ class Canvas(Gtk.Widget, Gtk.Scrollable):
 
     def copy_selection(self):
         if self._sel:
-            self._clip = [it.transformed(1, 0, 0, 0, 0) for it in self._sel['items']]
+            Canvas._clip = [it.transformed(1, 0, 0, 0, 0) for it in self._sel['items']]
         return bool(self._sel)
 
     def paste(self, at=None):
@@ -2601,7 +2620,7 @@ class Canvas(Gtk.Widget, Gtk.Scrollable):
             return True
         page = self.doc.pages[self.current_page_index()]
         items = [it.transformed(1, 0, 0, 14, 14) for it in self._clip]
-        self._clip = items
+        Canvas._clip = [it.transformed(1, 0, 0, 0, 0) for it in items]   # a copy of its own, never the pasted items
         self.doc.add_items(page, items)
         self.select(page, items)
         return True
@@ -2666,3 +2685,12 @@ class Canvas(Gtk.Widget, Gtk.Scrollable):
         self._popover = popover
         popover.popup()
         view.grab_focus()
+
+
+def _reflow_text(t, side, dx):
+    """The text box t with its lines made dx wider at its right edge (side 1) or its left (-1)."""
+    pad = t.x - t.bbox[0]
+    now = t.wrap if t.wrap > 0 else t.bbox[2] - t.bbox[0] - 2 * pad
+    wrap = max(t.size * 2, now + side * dx)   # room for a letter or two on a line
+    x = t.x + (now - wrap) if side < 0 else t.x
+    return Text(x, t.y, t.text, t.size, t.color, wrap, t.bg)
