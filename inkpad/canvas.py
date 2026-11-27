@@ -14,6 +14,7 @@ import os
 import cairo
 from gi.repository import Adw, Gdk, GLib, GObject, Graphene, Gsk, Gtk, Pango
 
+from .board_tiles import BoardTiles
 from .i18n import tr
 from . import geom
 from .geom import intersects, union
@@ -129,6 +130,7 @@ class Canvas(Gtk.Widget, Gtk.Scrollable):
         self._dev = 1.0
         self._tops = []
         self._cw = self._ch = 0.0
+        self._board_tiles = None
         self._cache = {}
         self._pending = {}
         self._bgs = collections.OrderedDict()   # rendered PDF backgrounds, most recently used last
@@ -271,6 +273,7 @@ class Canvas(Gtk.Widget, Gtk.Scrollable):
             self.doc.listeners.remove(self._doc_event)
         self.doc = doc
         doc.listeners.append(self._doc_event)
+        self._board_tiles = None
         self._cache.clear()
         self._pending.clear()
         self._bgs.clear()
@@ -1636,6 +1639,14 @@ class Canvas(Gtk.Widget, Gtk.Scrollable):
         return strips
 
     def _doc_event(self, kind, *args):
+        tiles = self._board_tiles
+        if tiles is not None:
+            if kind == 'pages':
+                self._board_tiles = None
+            elif kind == 'added' and args[0] is tiles.page:
+                tiles.added(args[1], self._hidden)
+            elif kind == 'dirty' and args[0] is tiles.page:
+                tiles.dirty(args[1])
         if kind == 'added':
             page, items = args
             entry = self._cache.get(page)
@@ -1690,7 +1701,13 @@ class Canvas(Gtk.Widget, Gtk.Scrollable):
                 rect = _rect(x, y, w, h)
                 snap.append_outset_shadow(outline.init_from_rect(rect, 0), _SHADOW, 0, 2, 0, 10)
                 snap.append_color(_WHITE if page.pdf is not None else rgba(*page.color), rect)
-            entry = self._ensure(page, i)
+            if board and page.pdf is None:
+                if self._board_tiles is None or self._board_tiles.page is not page:
+                    self._board_tiles = BoardTiles(page)
+                self._board_tiles.snapshot(self, snap, i)
+                entry = None
+            else:
+                entry = self._ensure(page, i)
             if entry is not None:
                 # Only the strips inside the viewport are uploaded and drawn.
                 k = h / page.h / entry.sy
@@ -2377,6 +2394,8 @@ class Canvas(Gtk.Widget, Gtk.Scrollable):
         self.queue_draw()
 
     def _repaint_page(self, page, rect):
+        if self._board_tiles is not None and self._board_tiles.page is page:
+            self._board_tiles.dirty(rect)
         entry = self._cache.get(page)
         if entry is not None:
             self._repaint(entry, page, rect)

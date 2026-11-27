@@ -1,10 +1,12 @@
 """Editor sidebar: page thumbnails in two columns, outline and bookmarks."""
+import threading
 import cairo
 from gi.repository import GLib, Gtk
 
 from .i18n import tr
 from . import icons
 from .icons import Icon, TextureView
+from .board_performance import frozen_page, large_board
 from .model import ink_on, page_surface
 from .render import texture_from_surface, worker
 
@@ -21,6 +23,7 @@ class Sidebar(Gtk.Box):
         self._marks = {}
         self._dirty = set()
         self._timer = 0
+        self._board_busy = False
 
         tabs = Gtk.Box(halign=Gtk.Align.CENTER, margin_top=10, margin_bottom=8)
         tabs.add_css_class('linked')
@@ -140,7 +143,7 @@ class Sidebar(Gtk.Box):
     # -- thumbnails, rendered lazily while the sidebar is visible -----------
 
     def _schedule(self):
-        if not self._timer and self._dirty:
+        if not self._timer and self._dirty and not self._board_busy:
             self._timer = GLib.timeout_add(350, self._flush)
 
     def _flush(self):
@@ -157,10 +160,36 @@ class Sidebar(Gtk.Box):
             if page.pdf is not None:
                 worker().submit(3, lambda page=page: page in self._views, page, pw, ph,
                                 lambda surface, page=page: self._compose(page, surface, False))
+            elif large_board(page):
+                self._board_busy = True
+                self._board_thumbnail(page, view, pw, ph)
+                break
             else:
                 view.set_texture(texture_from_surface(page_surface(page, 0, (pw, ph))))
         self._schedule()
         return False
+
+    def _board_thumbnail(self, page, view, width, height):
+        frozen = frozen_page(page)
+
+        def done(surface):
+            self._board_busy = False
+            if self._views.get(page) is view:
+                if page.rev != frozen.rev:
+                    self._dirty.add(page)
+                elif surface is not None:
+                    view.set_texture(texture_from_surface(surface))
+            self._schedule()
+            return False
+
+        def render():
+            surface = None
+            try:
+                surface = page_surface(frozen, 0, (width, height))
+            finally:
+                GLib.idle_add(done, surface)
+
+        threading.Thread(target=render, name='inkpad-board-thumbnail', daemon=True).start()
 
     def _compose(self, page, surface, paper):
         view = self._views.get(page)
