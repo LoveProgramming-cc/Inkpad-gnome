@@ -1,0 +1,36 @@
+name: Whiteboard regression
+on:
+  pull_request:
+    paths:
+      - 'inkpad/**'
+      - 'tests/whiteboard*.py'
+      - '.github/workflows/whiteboard.yml'
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      GSK_RENDERER: cairo
+      GSETTINGS_BACKEND: memory
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install GTK test dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends python3-gi python3-cairo gir1.2-gtk-4.0 gir1.2-adw-1 libpoppler-glib8 xvfb xauth
+      - name: Check rendering and persistence
+        run: xvfb-run -a /usr/bin/python3 tests/whiteboard.py
+      - name: Compare synthetic large-board timings
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/base" "$BASE"
+          for source in "$RUNNER_TEMP/base" "$GITHUB_WORKSPACE"; do
+            echo "Testing $(git -C "$source" rev-parse --short HEAD)"
+            xvfb-run -a /usr/bin/python3 tests/whiteboard_timing.py "$source"
+          done

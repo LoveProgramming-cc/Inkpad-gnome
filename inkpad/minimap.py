@@ -1,13 +1,14 @@
 """The whiteboard navigator: a small map of where the board is written on, with the
 part on screen marked, the zoom level, and a button that brings all of it into view."""
+import cairo
 from gi.repository import GLib, Graphene, Gsk, Gtk
 
 from .i18n import tr
 from . import icons
-from .geom import densify, union
+from .geom import union
+from .board_performance import BoardOverview
 from .icons import Icon
-from .model import page_box
-from .render import rgba
+from .render import rgba, texture_from_surface
 
 MAP_W, MAP_H = 216, 150
 _VIEW_FILL = rgba(0.21, 0.52, 0.89, 0.22)
@@ -18,9 +19,8 @@ class _Map(Gtk.Widget):
     def __init__(self, canvas):
         super().__init__(width_request=MAP_W, height_request=MAP_H, overflow=Gtk.Overflow.HIDDEN)
         self.canvas = canvas
-        self.cells = set()     # occupied grid cells of the board's content
-        self.cell = 1.0        # their size in page points
-        self.box = None        # the page area the cells cover
+        self.overview = BoardOverview()
+        self._ink_key = self._ink_layer = None
         self._fit = None       # (region x0, region y0, scale, offset x, offset y) of the last frame
         drag = Gtk.GestureDrag()
         drag.connect('drag-begin', lambda g, x, y: self._go(x, y))
@@ -37,21 +37,8 @@ class _Map(Gtk.Widget):
         if canvas.doc is None:
             return
         page = canvas.doc.pages[canvas.current_page_index()]
-        self.box = x0, y0, x1, y1 = page_box(page)
-        cell = max((x1 - x0) / 64, (y1 - y0) / 44, 1e-6)
-        cells = set()
-        for it in page.items:
-            if it.kind in ('i', 't'):
-                bx0, by0, bx1, by1 = it.bbox
-                for cx in range(int((bx0 - x0) / cell), int((bx1 - x0) / cell) + 1):
-                    for cy in range(int((by0 - y0) / cell), int((by1 - y0) / cell) + 1):
-                        cells.add((cx, cy))
-            else:
-                line = it.polyline()
-                if line:
-                    for p in (densify(line, cell * 0.45) if len(line) > 1 else line):
-                        cells.add((int((p[0] - x0) / cell), int((p[1] - y0) / cell)))
-        self.cell, self.cells = cell, cells
+        self.overview.refresh(page)
+        self._ink_key = None
         self.queue_draw()
 
     def do_snapshot(self, snap):
@@ -60,23 +47,37 @@ class _Map(Gtk.Widget):
         if view is None:
             return
         w, h = self.get_width(), self.get_height()
+        if w <= 0 or h <= 0:
+            return
         # The map covers the content and wherever the view currently is.
-        rx0, ry0, rx1, ry1 = union(self.box, view) if self.box else view
+        rx0, ry0, rx1, ry1 = union(self.overview.box, view) if self.overview.box else view
         pad = 0.04 * max(rx1 - rx0, ry1 - ry0)
         rx0, ry0, rx1, ry1 = rx0 - pad, ry0 - pad, rx1 + pad, ry1 + pad
         s = min(w / (rx1 - rx0), h / (ry1 - ry0))
         ox, oy = (w - (rx1 - rx0) * s) / 2, (h - (ry1 - ry0) * s) / 2
         self._fit = (rx0, ry0, s, ox, oy)
 
-        if self.cells:
+        if self.overview.cells:
             # In the panel's own text colour, so the blocks show in light and dark themes alike.
             ink = self.get_color()
-            ink.alpha = 0.55
-            bx, by = self.box[0], self.box[1]
-            side = max(self.cell * s + 0.6, 2.0)   # a little overlap, so neighbours read as one block
-            for cx, cy in self.cells:
-                snap.append_color(ink, Graphene.Rect().init(ox + (bx + cx * self.cell - rx0) * s,
-                                                            oy + (by + cy * self.cell - ry0) * s, side, side))
+            # The ink layer changes independently of the viewport indicator.
+            dev = self.get_scale_factor()
+            key = (self.overview, w, h, dev, self._fit, ink.red, ink.green, ink.blue)
+            if self._ink_key != key:
+                surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, w * dev, h * dev)
+                cr = cairo.Context(surface)
+                cr.scale(dev, dev)
+                cr.set_source_rgba(ink.red, ink.green, ink.blue, 0.55)
+                bx, by = self.overview.origin
+                cell = self.overview.cell
+                side = max(cell * s + 0.6, 2.0)
+                for cx, cy in self.overview.cells:
+                    cr.rectangle(ox + (bx + cx * cell - rx0) * s,
+                                 oy + (by + cy * cell - ry0) * s, side, side)
+                    cr.fill()
+                self._ink_layer = texture_from_surface(surface)
+                self._ink_key = key
+            snap.append_texture(self._ink_layer, Graphene.Rect().init(0, 0, w, h))
         rect = Graphene.Rect().init(ox + (view[0] - rx0) * s, oy + (view[1] - ry0) * s,
                                     (view[2] - view[0]) * s, (view[3] - view[1]) * s)
         snap.append_color(_VIEW_FILL, rect)
@@ -119,8 +120,9 @@ class Minimap(Gtk.Box):
             self.zoom.set_label('%d%%' % round(self.canvas.zoom * 100))
             self.map.queue_draw()
 
-    def content_changed(self):
+    def content_changed(self, kind, *args):
         """The board was drawn on: update the picture shortly, not on every stroke point."""
+        self.map.overview.changed(kind, *args)
         if self.get_visible() and not self._timer:
             self._timer = GLib.timeout_add(350, self._render)
 
@@ -130,6 +132,7 @@ class Minimap(Gtk.Box):
         return False
 
     def show_for(self, board):
+        self.map.overview = BoardOverview()
         self.set_visible(board)
         if board:
             self.map.render()

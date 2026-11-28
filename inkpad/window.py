@@ -16,6 +16,7 @@ from .dialogs import PaperDialog, ask_cover, ask_page, ask_text
 from .icons import Icon, TextureView
 from .minimap import Minimap
 from .library import LibraryView, Store, fitted, menu_popover
+from .board_performance import save_job
 from .model import Changed, Document, Image, Page, Stroke, export_pdf, export_png, find_text, notebook_id, page_surface
 from .prefs import PrefsDialog, apply_theme
 from .render import texture_from_surface
@@ -95,6 +96,7 @@ class Window(Adw.ApplicationWindow):
         self.canvas.on_scribble = lambda n: self.st.get('scribble_toast', True) and self.toast(tr('已擦除 %d 项') % n, tr('撤销'), self._undo)
         self.canvas.on_pull_add = self._pull_add
 
+        self._quiet_pending = None
         self._sync_busy = False
         self._sync_error = None
         self._sync_next = None    # a sync asked for while one was running: (quiet, only the open notebook?)
@@ -681,7 +683,7 @@ class Window(Adw.ApplicationWindow):
             c = self.canvas
             pts = [(20 + 240 * t, 22 + 7 * math.sin(t * 2 * math.pi), 0.6) for t in (i / 40 for i in range(41))]
             item = Stroke('hl', c.hl_color, w, pts) if hl else Stroke('ball', c.pen_color, w, pts)
-            Stroke.on_dark = True   # plain blending: the preview has no paper underneath
+            Stroke.paper_state.dark = True   # plain blending: the preview has no paper underneath
             item.draw(cr)
             preview.set_texture(texture_from_surface(surface))
 
@@ -1354,7 +1356,7 @@ class Window(Adw.ApplicationWindow):
 
     def _doc_event(self, kind, *args):
         # Every kind of change counts: erasing, for one, only announces a new state.
-        self.minimap.content_changed()
+        self.minimap.content_changed(kind, *args)
         if kind == 'state':
             self._update_title()
             self.undo_btn.set_sensitive(bool(self.doc.undo_stack))
@@ -1395,11 +1397,11 @@ class Window(Adw.ApplicationWindow):
         self._relocate(doc)
         if not self._absorb(doc):
             return False
-        snap, path, sign = doc.snapshot(), doc.path, doc.sign
+        snapshot, path, sign, revision = save_job(doc), doc.path, doc.sign, doc.rev
 
         def work():
             try:
-                result, error = Document.write_snapshot(path, snap, sign), None
+                result, error = Document.write_snapshot(path, snapshot(), sign), None
             except Exception as exc:
                 result, error = None, exc
             GLib.idle_add(done, result, error)
@@ -1418,8 +1420,8 @@ class Window(Adw.ApplicationWindow):
             else:
                 if latest and doc.path == path:
                     doc.sign = result
-                if doc.saved_rev < snap['rev']:
-                    doc.saved_rev = snap['rev']
+                if doc.saved_rev < revision:
+                    doc.saved_rev = revision
             return False
 
         thread = self._save_thread = threading.Thread(target=work, daemon=True)
@@ -1618,6 +1620,25 @@ class Window(Adw.ApplicationWindow):
             # Not forgotten: it runs when this one is over. The whole library outranks one notebook.
             was = self._sync_next
             self._sync_next = (quiet and (was is None or was[0]), only and (was is None or was[1]))
+            return
+        if quiet and self.in_editor() and self.doc is not None and self.doc.path and (self.canvas._op is not None
+                or self._save_thread is not None or self.doc.modified):
+            # The editor's autosave owns this revision. A periodic sync must not join
+            # its worker or force a synchronous save between strokes.
+            if self.doc.modified and not self._save_timer and self._save_thread is None:
+                self._schedule_save()
+            if self._quiet_pending is None:
+                self._quiet_pending = only
+
+                def retry():
+                    scope, self._quiet_pending = self._quiet_pending, None
+                    if self.get_application() is not None:
+                        self.sync_now(True, scope)
+                    return False
+
+                GLib.timeout_add(1500, retry)
+            else:
+                self._quiet_pending = self._quiet_pending and only
             return
         only = only and self.in_editor() and self.doc is not None and bool(self.doc.path)
         began = time.monotonic()

@@ -116,6 +116,25 @@ class Stroke:
         if self.pts:
             self.update_bbox()
 
+    _frozen = None
+
+    def __setattr__(self, name, value):
+        if self._frozen is not None:
+            self.__dict__.pop('_frozen', None)
+        object.__setattr__(self, name, value)
+
+    def save_view(self):
+        # The editor finalises in-place point edits with update_bbox(). Attribute
+        # changes (including tape state and IDs) invalidate this detached copy.
+        if self._frozen is None:
+            item_id(self)
+            frozen = object.__new__(Stroke)
+            frozen.__dict__ = vars(self).copy()
+            frozen.pts = tuple(self.pts)
+            frozen.color = tuple(self.color)
+            self.__dict__['_frozen'] = frozen
+        return self._frozen
+
     def w_at(self, p):
         if self.tool == 'fountain':
             return self.width * max(0.15, 1 + self.sens * 1.2 * (p - 0.5))
@@ -129,7 +148,7 @@ class Stroke:
     def update_bbox(self):
         self.bbox = geom.bbox_of(self.pts, self.pad())
 
-    on_dark = False   # set by ink_on() for the page about to be drawn
+    paper_state = threading.local()   # cover and canvas can render different pages concurrently
 
     def draw(self, cr):
         if not self.pts:
@@ -148,7 +167,7 @@ class Stroke:
             cr.save()
             # Multiplying darkens, which is what a marker does on light paper but
             # would make it invisible on a dark one.
-            if not Stroke.on_dark:
+            if not getattr(Stroke.paper_state, 'dark', False):
                 cr.set_operator(cairo.OPERATOR_MULTIPLY)
             cr.set_source_rgba(*self.color, HL_ALPHA)
         else:
@@ -224,8 +243,13 @@ class Stroke:
                       [_rot_pt(k, w, h, x, y) + (p,) for x, y, p in self.pts], self.sens, self.dash)
 
     def to_json(self, ctx):
+        packed = getattr(self, '_packed', None)
+        if packed is None:
+            packed = pack_points(self.pts)
+            if isinstance(self.pts, tuple):  # only detached, immutable stroke views
+                self._packed = packed
         d = {'k': 's', 't': self.tool, 'c': list(self.color), 'w': self.width, 'ps': self.sens, 'd': self.dash,
-             'q': pack_points(self.pts)}
+             'q': packed}
         if self.open:
             d['o'] = True
         return d
@@ -503,6 +527,11 @@ def page_box(page):
     box = None
     for it in page.items:
         box = union(box, it.bbox)
+    return board_box(page, box)
+
+
+def board_box(page, box):
+    """Pad the accumulated whiteboard bounds for the overview, cover and export."""
     if box is None:
         return page.w / 2 - 400, page.h / 2 - 300, page.w / 2 + 400, page.h / 2 + 300
     # Pad, and keep a sensible minimum size and shape.
@@ -746,7 +775,7 @@ def find_text(page, query):
 def ink_on(page):
     """Tell the items which kind of paper they are about to be drawn on."""
     r, g, b = page.color[:3]
-    Stroke.on_dark = page.pdf is None and 0.299 * r + 0.587 * g + 0.114 * b < 0.45
+    Stroke.paper_state.dark = page.pdf is None and 0.299 * r + 0.587 * g + 0.114 * b < 0.45
 
 
 def render_page(cr, page, printing=False, paper=True, ink=True):
@@ -768,7 +797,7 @@ def render_page(cr, page, printing=False, paper=True, ink=True):
         return
     ink_on(page)
     if not paper:
-        Stroke.on_dark = True   # nothing underneath to multiply with
+        Stroke.paper_state.dark = True   # nothing underneath to multiply with
     for it in page.items:
         it.draw(cr)
 
@@ -1063,8 +1092,9 @@ class Document:
 
     @staticmethod
     def _swap(seq, out, into):
-        gone = {id(obj) for _, obj in out}
-        seq[:] = [obj for obj in seq if id(obj) not in gone]
+        if out:
+            gone = {id(obj) for _, obj in out}
+            seq[:] = [obj for obj in seq if id(obj) not in gone]
         for index, obj in sorted(into, key=lambda pair: pair[0]):
             seq.insert(min(index, len(seq)), obj)
 
@@ -1217,7 +1247,14 @@ class Document:
                     items.append(data)
                 # Tombstones are only needed until every device has seen the removal; cap them.
                 gone = sorted(page.gone)[-GONE_LIMIT:]
-                page._blob = (page.rev, json.dumps({'items': items, 'gone': gone}, separators=(',', ':')))
+                if page.board and len(items) >= 512:
+                    # Encode in bounded batches so input can run between encoder calls.
+                    chunks = [json.dumps(items[i:i+128], separators=(',', ':'))[1:-1]
+                              for i in range(0, len(items), 128)]
+                    blob = '{"items":[' + ','.join(chunks) + '],"gone":' + json.dumps(gone, separators=(',', ':')) + '}'
+                else:
+                    blob = json.dumps({'items': items, 'gone': gone}, separators=(',', ':'))
+                page._blob = (page.rev, blob)
             blobs[page.id] = page._blob[1]
         meta = {'format': 'inkpad', 'version': 3, 'pages': pages, 'id': self.id,
                 'gone': sorted(self.gone_pages)[-GONE_LIMIT:]}
@@ -1335,6 +1372,8 @@ class Document:
             for k, data in enumerate(content['items']):
                 item = _KINDS[data['k']].from_json(data, ctx)
                 item.id = data.get('id') or _digest('%s/%d/%s' % (page.id, k, json.dumps(data, sort_keys=True)))
+                if page.board and len(content['items']) >= 512 and item.kind == 's':
+                    item.save_view()._packed = data.get('q')
                 page.items.append(item)
             page.gone = set(content.get('gone', []))
             page.mt, page._sign = d.get('mt', 0.0), _page_sign(page)
